@@ -29,11 +29,11 @@ class page {
     public $_request = array();
 
     public function __construct($act){
-       // $this->_request = array_merge($_GET, $_POST);
-       //if ($act){
+        $this->_request = array_merge($_GET, $_POST);
+//       if ($act){
             $error = new errorPage();
             $error->view();
-       // }
+//        }
     }
 
     public function _set(){

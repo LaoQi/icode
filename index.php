@@ -11,6 +11,8 @@ define('CSSPATH', "/data/css/");
 define('JSPATH', "/data/js/");
 define('PLUGIN_PATH', dirname(__FILE__) . "/plugin/"); 
 
+$GLOBALS['DB'] = 'sqlite';
+
 function __autoload($classname){
     require_once PLUGIN_PATH . $classname . ".php";
 }
