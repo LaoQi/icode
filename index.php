@@ -17,14 +17,6 @@ function __autoload($classname){
     require_once PLUGIN_PATH . $classname . ".php";
 }
 
-/**
- * 进行地址解析,显示页面
- */
-
-$url = $_SERVER['QUERY_STRING'];
-$params = explode('&',$url);
-$pageCur = $params[0];
-$cool = new page($pageCur);
-$cool->view();
+route::go();
 
 ?>

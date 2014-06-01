@@ -18,11 +18,11 @@ class errorPage extends page{
     public $_errorType;
     public $_content;
     public $_css = array('error.css');
-    public $_headers = array('<title>发生错误啦</title>');
 
     public function __construct($type = 404){
         $this->_type = 'html';
         $this->_errorType = $type;
+        $this->page['title'] = '发生错误啦';
         if (isset($this->_errorData[$type])){
             $this->_content = $this->_errorData[$type];
         } else {

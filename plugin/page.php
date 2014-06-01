@@ -6,7 +6,10 @@
  * 2014-05-17
  */
 
-class page {
+class page extends BASE {
+
+    //页面信息
+    public $page = array();
 
     /**
      * 网页元素
@@ -22,21 +25,16 @@ class page {
     public $_content = array();
     public $_sidebar = false;
 
-    /**
-     * 接收的数据
-     */
-
-    public $_request = array();
-
-    public function __construct($act){
-        $this->_request = array_merge($_GET, $_POST);
-//       if ($act){
-            $error = new errorPage();
-            $error->view();
-//        }
+    public function __construct($page){
+        parent::__construct();
+        $this->page = $page;
     }
 
     public function _set(){
+    }
+
+    public function setTitle($title){
+        $this->_headers[] = "<title>" . $title . "</title>";
     }
 
 
@@ -44,6 +42,7 @@ class page {
         ob_start();
         if ($this->_type == 'html'){
             echo '<!DOCTYPE html>';
+            $this->setTitle($this->page['title']);
             $this->_html();
         } elseif ($this->_type == 'xml'){
             echo '<?xml version="1.0" encoding="' . $this->_coding . '"?>';
@@ -86,7 +85,9 @@ class page {
      * 拼接内容
      */
     public function _makeContent(){
-        var_dump($this->_request);
+        echo "<pre>";
+        var_dump($this->page);
+        echo "</pre>";
     }
 
     public function _img($img, $css = false){

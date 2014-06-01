@@ -1,6 +1,6 @@
 <?php
 
-define('DBPATH', dirname(__FILE__) . '/../data/data.db');
+define('DBPATH', dirname(__FILE__) . '/../data/pages.data');
 class sqlite {
     static public $db;
     
