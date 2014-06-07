@@ -1,5 +1,6 @@
 <?php
-$db = new SQLite3('pages.data');
+
+$db  = new SQLite3('pages.data');
 $db->query('create table 
     page(
         id integer primary key autoincrement,
@@ -10,6 +11,7 @@ $db->query('create table
         content text,
         istemp integer
 );');
+echo $db->lastErrorMsg();
 $db->query('create table 
     content(
         id integer primary key autoincrement,
@@ -18,6 +20,8 @@ $db->query('create table
         type text,
         datetime integer default 0
 );');
-    $info = $db->lastErrorMsg();
-    echo $info;
+echo $db->lastErrorMsg();
+$now = time();
+$db->query("insert into page(id, title, datetime, style, istemp) values(10086, 'manage-page', {$now}, 'normal', 1);");
+echo $db->lastErrorMsg();
 ?>
