@@ -53,11 +53,19 @@ class page extends BASE {
         }
         if ($this->_isTemp) {
             $page = ob_get_contents();
-            file_put_contents(TEMP . $this->page['id'] . '.tpl', $page);
+            $this->writeFile($page);
         }
         ob_end_flush();
         exit;
     }
+
+    public function writeFile($page){
+        if (!is_writable(TEMP)){
+            chmod(TEMP, 0770);
+        }
+        file_put_contents(TEMP . $this->page['id'] . '.tpl', $page);
+    }
+
 
     /**
      * html页面
