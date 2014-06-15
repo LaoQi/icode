@@ -3,7 +3,7 @@
 /**
  * 简单路由类
  */
-class route extends BASE {
+class Route extends BASE {
 
     static public $page;
     static public $me;
@@ -54,6 +54,7 @@ class route extends BASE {
         }
         if (self::$temp != NULL) {
             echo self::$temp;
+            echo "useTemp";
             exit;
         }
         self::$page->view();

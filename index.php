@@ -16,9 +16,19 @@ define('PLUGIN_PATH', dirname(__FILE__) . DS . "plugin" . DS);
 $GLOBALS['DB'] = 'sqlite';
 
 function __autoload($classname){
-    require_once PLUGIN_PATH . $classname . ".php";
+    if (is_dir(PLUGIN_PATH . $classname)){
+        require PLUGIN_PATH . $classname . DS . "main.php";
+    } elseif (is_file(PLUGIN_PATH . $classname . ".php")){
+        require PLUGIN_PATH . $classname . ".php";
+    } else {
+        throw new Exception("cann`t find plugin {$classname} !", 233);
+    }
 }
 
-route::go();
+try {
+    Route::go();
+} catch (Exception $e){
+    echo $e->getMessage();
+}
 
 ?>
