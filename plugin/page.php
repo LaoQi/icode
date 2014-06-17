@@ -29,6 +29,10 @@ class page extends BASE {
         parent::__construct();
         $this->page    = $page;
         $this->_isTemp = isset($page['istemp']) ? (int) $page['istemp'] : 0;
+        $this->_content = self::$db->query("select * from content where pageid=" . $page['id']);
+        if (empty($this->_content)){
+            throw new Exception("页面内容已经消失!", 333);
+        }
     }
 
     public function _set() {
@@ -97,28 +101,33 @@ class page extends BASE {
      * 拼接内容
      */
     public function _makeContent() {
-        
-    }
-
-    public function _img($img, $css = false) {
-        echo '<img ';
-        if ($css) {
-            echo 'class="' . $css . '" ';
+        foreach($this->_content as $element){
+            $tmp = new $element['type']();
+            $tmp->view();
         }
-        echo 'src="' . IMGPATH . $img . '" />';
     }
 
-    public function _div($div, $css = false, $id = false) {
-        echo '<div ';
+    public function img($img, $css = false) {
+        $rtn = '<img ';
         if ($css) {
-            echo 'class="' . $css . '" ';
+            $rtn .= 'class="' . $css . '" ';
+        }
+        $rtn .= 'src="' . IMGPATH . $img . '" />';
+        return $rtn;
+    }
+
+    public function div($content, $css = false, $id = false) {
+        $rtn = '<div ';
+        if ($css) {
+            $rtn .= 'class="' . $css . '" ';
         }
         if ($id) {
-            echo 'id="' . $id . '"';
+            $rtn .= 'id="' . $id . '"';
         }
-        echo '/>';
-        echo $div;
-        echo '</div>';
+        $rtn .= '/>';
+        $rtn .= $content;
+        $rtn .= '</div>';
+        return $rtn;
     }
 
 }

@@ -19,7 +19,8 @@ class BASE {
         }
         $url = $_SERVER['QUERY_STRING'];
         $params = explode('&',$url);
-        $this->act = urldecode($params[0]);
+        $act = urldecode($params[0]);
+        $this->act = trim($act);
     }
 
 }

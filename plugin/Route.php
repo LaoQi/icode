@@ -17,7 +17,7 @@ class Route extends BASE {
 
     private function _getPage() {
         if ($this->act == NULL) {
-            self::$page = new page(array('title' => 'index'));
+            self::$page = new page(array('title' => 'index', 'id' => 1000));
             return;
         }
         if (is_numeric($this->act)) {
@@ -48,7 +48,7 @@ class Route extends BASE {
         self::$page = new errorPage();
     }
 
-    static public function go() {
+    static public function Go() {
         if (self::$me == NULL) {
             self::$me = new self();
         }

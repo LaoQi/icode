@@ -26,9 +26,10 @@ function __autoload($classname){
 }
 
 try {
-    Route::go();
+    Route::Go();
 } catch (Exception $e){
-    echo $e->getMessage();
+    $error = new errorPage($e->getCode(), $e->getMessage());
+    $error->view();
 }
 
 ?>
