@@ -36,8 +36,8 @@ void main_loop(HSocket server_sockfd) {
         socklen_t length = sizeof(client_addr);
 
         HSocket conn = accept(server_sockfd, (struct sockaddr*)&client_addr, &length);
-        IN_ADDR ip_addr = client_addr.sin_addr;
-        LOG("#%d.%d.%d.%d \n", ip_addr.S_un.S_un_b.s_b1, ip_addr.S_un.S_un_b.s_b2, ip_addr.S_un.S_un_b.s_b3, ip_addr.S_un.S_un_b.s_b4);
+        //IN_ADDR ip_addr = client_addr.sin_addr;
+        //LOG("#%d.%d.%d.%d \n", ip_addr.S_un.S_un_b.s_b1, ip_addr.S_un.S_un_b.s_b2, ip_addr.S_un.S_un_b.s_b3, ip_addr.S_un.S_un_b.s_b4);
         if(conn<0) {
             SOCPERROR("connect");
             continue;

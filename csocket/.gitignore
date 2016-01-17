@@ -3,3 +3,6 @@ Release/
 .vs/
 *.sdf
 *.opensdf
+*.cproject
+*.project
+
