@@ -36,8 +36,6 @@ void main_loop(HSocket server_sockfd) {
         socklen_t length = sizeof(client_addr);
 
         HSocket conn = accept(server_sockfd, (struct sockaddr*)&client_addr, &length);
-        IN_ADDR ip_addr = client_addr.sin_addr;
-        LOG("#%d.%d.%d.%d \n", ip_addr.S_un.S_un_b.s_b1, ip_addr.S_un.S_un_b.s_b2, ip_addr.S_un.S_un_b.s_b3, ip_addr.S_un.S_un_b.s_b4);
         if(conn<0) {
             SOCPERROR("connect");
             continue;
@@ -57,7 +55,7 @@ int main(int argc, char* argv[]) {
     int port = DEFAULT_PORT;
     if (argc >= 2) {
         if (strcmp(argv[1], "-p") != 0 || argc < 3) {
-            fputs("Usage: -p port\n\tdefault port is 8888", stdout);
+            LOG("Usage: -p port\n\tdefault port is %d", DEFAULT_PORT);
             exit(1);
         } else {
             port = atoi(argv[2]);
