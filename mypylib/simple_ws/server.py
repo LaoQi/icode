@@ -20,13 +20,15 @@ class Server:
     socket_list = set()
     port = 7000
     timeout = 20
-    html = None
+    content = dict()
 
     session = dict()
 
     def __init__(self):
-        with open("index.html", 'r') as f:
-            self.html = f.read()
+        filelist = ['test.html', 'upload.js']
+        for i in filelist:
+            with open(i, 'r') as f:
+                self.content[i] = f.read()
 
     def wshandshake(self, conn, v):
 
@@ -94,7 +96,10 @@ class Server:
     def protocol(self, conn):
         data = conn.recv(8192)
         is_ws = False
-        for line in data.split('\r\n\r\n')[0].split('\r\n')[1:]:
+        query = data.split('\r\n\r\n')[0].split('\r\n')
+        path = query[0].split(' ')[1]
+        logging.info(path)
+        for line in query[1:]:
             k, v = line.split(': ')
             # 带key头，为ws连接
             if k == 'Sec-WebSocket-Key':
@@ -102,10 +107,17 @@ class Server:
                 self.wshandshake(conn, v)
         # 非ws连接时，采用json做接口协议
         if not is_ws:
+            filename = 'test.html'
+            if len(path) > 1:
+                filename = path[1:]
+            if filename not in self.content:
+                filename = 'test.html'
+                # @TODO 404
             response = 'HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n' + \
-                       'Content-Length:%d\r\n\r\n' % len(self.html)
+                       'Content-Length:%d\r\n\r\n' % len(self.content[filename])
+
             conn.send(response)
-            conn.send(self.html)
+            conn.send(self.content[filename])
             conn.close()
 
     @staticmethod
@@ -146,7 +158,6 @@ class Server:
         if data == '':
             # if conn in self.socket_list:
             #     self.socket_list.remove(conn)
-            logging.info(data)
             logging.info("ignore empty msg")
             self.ws_send(conn, 'empty:%d' % session['no'])
             # conn.close()
@@ -165,6 +176,8 @@ class Server:
                 self.ws_send(conn, 'ok:0')
                 self.session[sesskey]['buffer'] = []
                 self.session[sesskey]['no'] = 0
+                self.session[sesskey]['file'] = open(
+                    os.path.join(os.path.dirname(__file__), 'upload', msg['name']), 'ab')
             elif msg['a'] == 'f':
                 logging.info('a %s s %d e %d n %d' % (msg['a'], msg['s'], msg['e'], msg['n']))
                 start, end = msg['s'], msg['e']
@@ -185,13 +198,18 @@ class Server:
                     self.session[sesskey]['buffer'].append(msg['d'])
                     self.session[sesskey]['no'] += 1
                     logging.info('ok msg %d' % msg['n'])
+                    # 每1M写入一次
+                    if len(session['buffer']) > 128:
+                        for i in session['buffer']:
+                            self.session[sesskey]['file'].write(i)
+                        self.session[sesskey]['buffer'] = []
                     self.ws_send(conn, "ok:%d" % (msg['n']))
 
             elif msg['a'] == 'over':
                 logging.info("total recv %d" % (len(session['buffer'])))
-                with open(os.path.join(os.path.dirname(__file__), 'upload', session['name']), 'ab') as f:
-                    for i in session['buffer']:
-                        f.write(i)
+                for i in session['buffer']:
+                    self.session[sesskey]['file'].write(i)
+                self.session[sesskey]['file'].close()
                 self.ws_close(conn)
 
     def run(self):
