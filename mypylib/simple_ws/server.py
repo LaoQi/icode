@@ -19,6 +19,7 @@ class Server:
     socket = None
     socket_list = set()
     port = 7000
+    buffersize = 1024*1024
     timeout = 20
     content = dict()
 
@@ -40,29 +41,72 @@ class Server:
         conn.send(response)
         self.socket_list.add(conn)
         # 超时时长， 文件名， 缓存大小
-        self.session[conn.fileno()] = dict()
+        self.session[conn.fileno()] = dict(buffer='', length=0, no=0)
         self.ws_send(conn, 'init')
 
-    @staticmethod
-    def ws_recv(conn, size=1024*1024):
+    def ws_process(self, conn, size=1024*1024):
         data = conn.recv(size)
-        if not len(data):
-            return False, 0
+        sesskey = conn.fileno()
+        if sesskey not in self.session or 'buffer' not in self.session[sesskey]:
+            self.ws_send(conn, 'session error!')
+
+            if conn in self.socket_list:
+                self.socket_list.remove(conn)
+            conn.close()
+            return
+
+        self.session[sesskey]['buffer'] += data
+        # 可能关闭连接，销毁session
+        while sesskey in self.session and self.session[sesskey]['buffer']:
+            if self.session[sesskey]['length'] == 0:
+                b = self.session[sesskey]['buffer']
+                if len(b) < 14:
+                    break
+                len_flag = ord(b[1]) & 127  # 数据长度
+                if len_flag == 126:
+                    self.session[sesskey]['length'] = ord(b[2]) * 256 + ord(b[3]) + 8
+                elif len_flag == 127:
+                    self.session[sesskey]['length'] = reduce(lambda y, z: y * 256 + z, map(lambda x: ord(x), b[2:9])) + 14
+                else:
+                    self.session[sesskey]['length'] = len_flag + 6
+                logging.info("length %d, buffer %d" % (self.session[sesskey]['length'], len(self.session[sesskey]['buffer'])))
+
+            if self.session[sesskey]['length'] <= len(self.session[sesskey]['buffer']) \
+                    and self.session[sesskey]['length'] != 0:
+                # 处理完整包
+                pack_data = self.session[sesskey]['buffer'][:self.session[sesskey]['length']]
+
+                if len(self.session[sesskey]['buffer']) > self.session[sesskey]['length']:
+                    self.session[sesskey]['buffer'] = self.session[sesskey]['buffer'][self.session[sesskey]['length']:]
+                else:
+                    self.session[sesskey]['buffer'] = ''
+                self.session[sesskey]['length'] = 0
+
+                self.package_process(conn, pack_data)
+
+            else:
+                break
+
+    def package_process(self, conn, data):
+        # logging.info(data)
 
         FIN = ord(data[0]) & 128  # 结束位
         Opcode = ord(data[0]) & 112  # 操作码
         is_mask = ord(data[1]) & 128  # 是否加掩码
-        length = ord(data[1]) & 127  # 数据长度
+        len_flag = ord(data[1]) & 127  # 数据长度
 
-        if length == 126:
+        if len_flag == 126:
             mask = data[4:8]
+            length = ord(data[2]) * 256 + ord(data[3])
             raw = data[8:]
-        elif length == 127:
+        elif len_flag == 127:
             mask = data[10:14]
             raw = data[14:]
+            length = reduce(lambda y, z: y * 256 + z, map(lambda x: ord(x), data[2:9]))
         else:
             mask = data[2:6]
             raw = data[6:]
+            length = len_flag
         ret = ''
         for cnt, d in enumerate(raw):
             ret += chr(ord(d) ^ ord(mask[cnt % 4]))
@@ -72,7 +116,67 @@ class Server:
             # hexstr = binascii.b2a_hex(data)
             # bsstr = bin(int(hexstr, 16))[2:]
             # logging.debug(bsstr)
-        return ret, len(raw)
+
+        sesskey = conn.fileno()
+        session = self.session[sesskey]
+
+        if not ret or ret is False:
+            # if conn in self.socket_list:
+            #     self.socket_list.remove(conn)
+            logging.info("ignore empty msg")
+            self.ws_send(conn, 'empty:%d' % session['no'])
+            # conn.close()
+            return
+        try:
+            logging.info(ret[:10])
+            msg = self.params_data(ret)
+        except Exception, e:
+            # logging.exception(e)
+            logging.debug("error:%d" % session['no'])
+            self.ws_send(conn, "error:%d" % session['no'])
+            return
+
+        if "a" in msg:
+            if msg['a'] == 'init':
+                self.session[sesskey]['name'] = msg['name']
+                self.ws_send(conn, 'ok:0')
+                self.session[sesskey]['filebuffer'] = []
+                self.session[sesskey]['no'] = 0
+                self.session[sesskey]['file'] = open(
+                    os.path.join(os.path.dirname(__file__), 'upload', msg['name']), 'ab')
+            elif msg['a'] == 'f':
+                logging.info('a %s s %d e %d n %d' % (msg['a'], msg['s'], msg['e'], msg['n']))
+                start, end = msg['s'], msg['e']
+                length = end - start
+                if msg['n'] != session['no']:
+                    if msg['n'] < session['no']:
+                        logging.info('already msg %d' % msg['n'])
+                        self.ws_send(conn, 'already:%d' % msg['n'])
+                    else:
+                        logging.info("ignore msg %d %d" % (msg['n'], session['no']))
+                        self.ws_send(conn, "retry:%d" % (session['no']))
+
+                elif length != len(msg['d']):
+                    logging.info("error length msg %d %d" % (length, len(msg['d'])))
+                    self.ws_send(conn, "retry:%d" % (msg['n']))
+
+                else:
+                    self.session[sesskey]['filebuffer'].append(msg['d'])
+                    self.session[sesskey]['no'] += 1
+                    logging.info('ok msg %d' % msg['n'])
+                    # 每1M写入一次
+                    if len(session['filebuffer']) > 128:
+                        for i in session['filebuffer']:
+                            self.session[sesskey]['file'].write(i)
+                        self.session[sesskey]['filebuffer'] = []
+                    self.ws_send(conn, "ok:%d" % (msg['n']))
+
+            elif msg['a'] == 'over':
+                logging.info("total recv %d" % (len(session['filebuffer'])))
+                for i in session['filebuffer']:
+                    self.session[sesskey]['file'].write(i)
+                self.session[sesskey]['file'].close()
+                self.ws_close(conn)
 
     @staticmethod
     def ws_send(conn, data):
@@ -97,7 +201,10 @@ class Server:
         data = conn.recv(8192)
         is_ws = False
         query = data.split('\r\n\r\n')[0].split('\r\n')
-        path = query[0].split(' ')[1]
+        head = query[0].split(' ')
+        path = '/'
+        if len(head) > 2:
+            path = head[1]
         logging.info(path)
         for line in query[1:]:
             k, v = line.split(': ')
@@ -137,81 +244,6 @@ class Server:
             return msg
         return msg
 
-    def ws_process(self, conn):
-        data, length = self.ws_recv(conn)
-        sesskey = conn.fileno()
-        # logging.info(data)
-
-        if not data and data is False:
-            return
-
-        if sesskey not in self.session:
-            self.ws_send(conn, 'session error!')
-
-            if conn in self.socket_list:
-                self.socket_list.remove(conn)
-            conn.close()
-            return
-
-        session = self.session[sesskey]
-
-        if data == '':
-            # if conn in self.socket_list:
-            #     self.socket_list.remove(conn)
-            logging.info("ignore empty msg")
-            self.ws_send(conn, 'empty:%d' % session['no'])
-            # conn.close()
-            return
-        try:
-            msg = self.params_data(data)
-        except Exception, e:
-            # logging.exception(e)
-            logging.debug("error:%d" % session['no'])
-            self.ws_send(conn, "error:%d" % session['no'])
-            return
-
-        if "a" in msg:
-            if msg['a'] == 'init':
-                self.session[sesskey]['name'] = msg['name']
-                self.ws_send(conn, 'ok:0')
-                self.session[sesskey]['buffer'] = []
-                self.session[sesskey]['no'] = 0
-                self.session[sesskey]['file'] = open(
-                    os.path.join(os.path.dirname(__file__), 'upload', msg['name']), 'ab')
-            elif msg['a'] == 'f':
-                logging.info('a %s s %d e %d n %d' % (msg['a'], msg['s'], msg['e'], msg['n']))
-                start, end = msg['s'], msg['e']
-                length = end - start
-                if msg['n'] != session['no']:
-                    if msg['n'] < session['no']:
-                        logging.info('already msg %d' % msg['n'])
-                        self.ws_send(conn, 'ok:%d' % msg['n'])
-                    else :
-                        logging.info("ignore msg %d %d" % (msg['n'], session['no']))
-                        self.ws_send(conn, "retry:%d" % (session['no']))
-
-                elif length != len(msg['d']):
-                    logging.info("error length msg %d %d" % (length, len(msg['d'])))
-                    self.ws_send(conn, "retry:%d" % (msg['n']))
-
-                else:
-                    self.session[sesskey]['buffer'].append(msg['d'])
-                    self.session[sesskey]['no'] += 1
-                    logging.info('ok msg %d' % msg['n'])
-                    # 每1M写入一次
-                    if len(session['buffer']) > 128:
-                        for i in session['buffer']:
-                            self.session[sesskey]['file'].write(i)
-                        self.session[sesskey]['buffer'] = []
-                    self.ws_send(conn, "ok:%d" % (msg['n']))
-
-            elif msg['a'] == 'over':
-                logging.info("total recv %d" % (len(session['buffer'])))
-                for i in session['buffer']:
-                    self.session[sesskey]['file'].write(i)
-                self.session[sesskey]['file'].close()
-                self.ws_close(conn)
-
     def run(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -229,7 +261,7 @@ class Server:
                     logging.debug("accept addr %s:%d" % addr)
                     self.protocol(conn)
                 else:  # 持续连接的都是ws
-                    self.ws_process(conn)
+                    self.ws_process(sock)
 
             for sock in e:
                 if sock in self.socket_list:

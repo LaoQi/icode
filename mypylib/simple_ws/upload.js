@@ -27,7 +27,7 @@ var wsUpload = {
         };
         this.conn.onmessage = this.onMessage;
         this.status = 'progress';
-        this.interval = setInterval('wsUpload.poll()', 1000);
+        this.interval = setInterval('wsUpload.poll()', 3000);
         this.fileInit(fileElement);
     },
     poll : function () {
@@ -98,6 +98,11 @@ var wsUpload = {
     },
     onProgress : null,
     onEnd : null,
+    onClose : function() {
+        this.status = 'end';
+        clearInterval(this.interval);
+        console.log("连接关闭");
+    },
     onOpen : function () {
         console.log("open");
     },
@@ -121,6 +126,15 @@ var wsUpload = {
                 if (wsUpload.endSize >= wsUpload.file.size) {
                     wsUpload.sendComplete();
                 }
+                wsUpload.sendNextChunk();
+                return ;
+            }
+            if (result[0] == 'already') {
+                success++;
+                if (wsUpload.endSize >= wsUpload.file.size) {
+                    wsUpload.sendComplete();
+                }
+                this.no++;
                 wsUpload.sendNextChunk();
                 return ;
             }
