@@ -15,6 +15,16 @@ from select import select
 logging.basicConfig(level=logging.DEBUG)
 
 
+def md5_for_file(f, block_size=2 ** 20):
+    md5 = hashlib.md5()
+    while True:
+        data = f.read(block_size)
+        if not data:
+            break
+        md5.update(data)
+    return md5.hexdigest()
+
+
 class Server:
     socket = None
     socket_list = set()
@@ -26,7 +36,7 @@ class Server:
     session = dict()
 
     def __init__(self):
-        filelist = ['test.html', 'upload.js']
+        filelist = ['test.html', 'upload.js', 'spark-md5.min.js']
         for i in filelist:
             with open(i, 'r') as f:
                 self.content[i] = f.read()
@@ -69,7 +79,7 @@ class Server:
                     self.session[sesskey]['length'] = reduce(lambda y, z: y * 256 + z, map(lambda x: ord(x), b[2:9])) + 14
                 else:
                     self.session[sesskey]['length'] = len_flag + 6
-                logging.info("length %d, buffer %d" % (self.session[sesskey]['length'], len(self.session[sesskey]['buffer'])))
+                # logging.info("length %d, buffer %d" % (self.session[sesskey]['length'], len(self.session[sesskey]['buffer'])))
 
             if self.session[sesskey]['length'] <= len(self.session[sesskey]['buffer']) \
                     and self.session[sesskey]['length'] != 0:
@@ -128,7 +138,7 @@ class Server:
             # conn.close()
             return
         try:
-            logging.info(ret[:10])
+            # logging.info(ret[:10])
             msg = self.params_data(ret)
         except Exception, e:
             # logging.exception(e)
@@ -139,11 +149,13 @@ class Server:
         if "a" in msg:
             if msg['a'] == 'init':
                 self.session[sesskey]['name'] = msg['name']
-                self.ws_send(conn, 'ok:0')
+                # self.ws_send(conn, 'ok:0')
                 self.session[sesskey]['filebuffer'] = []
                 self.session[sesskey]['no'] = 0
                 self.session[sesskey]['file'] = open(
                     os.path.join(os.path.dirname(__file__), 'upload', msg['name']), 'ab')
+            elif msg['a'] == 'ping':
+                self.ws_send(conn, "ok:%d" % (self.session[sesskey]['no']))
             elif msg['a'] == 'f':
                 logging.info('a %s s %d e %d n %d' % (msg['a'], msg['s'], msg['e'], msg['n']))
                 start, end = msg['s'], msg['e']
@@ -163,7 +175,7 @@ class Server:
                 else:
                     self.session[sesskey]['filebuffer'].append(msg['d'])
                     self.session[sesskey]['no'] += 1
-                    logging.info('ok msg %d' % msg['n'])
+                    # logging.info('ok msg %d' % msg['n'])
                     # 每1M写入一次
                     if len(session['filebuffer']) > 128:
                         for i in session['filebuffer']:
@@ -172,10 +184,22 @@ class Server:
                     self.ws_send(conn, "ok:%d" % (msg['n']))
 
             elif msg['a'] == 'over':
-                logging.info("total recv %d" % (len(session['filebuffer'])))
                 for i in session['filebuffer']:
                     self.session[sesskey]['file'].write(i)
+                self.session[sesskey]['filebuffer'] = []
                 self.session[sesskey]['file'].close()
+                logging.info("over")
+                self.ws_send(conn, "over")
+
+            elif msg['a'] == 'check':
+                logging.info("check file md5 : %s" % msg['hash'])
+                with open(os.path.join(os.path.dirname(__file__), 'upload', session['name']), 'rb') as f:
+                    md5 = md5_for_file(f)
+                    logging.info(md5)
+                self.ws_send(conn, "check:%s" % md5)
+
+            elif msg['a'] == 'closed':
+                logging.info("closed")
                 self.ws_close(conn)
 
     @staticmethod
@@ -190,6 +214,8 @@ class Server:
         conn.send(head + data)
 
     def ws_close(self, conn):
+        msg = '\x88\x00'
+        conn.send(msg)
         fileno = conn.fileno()
         logging.info("close conn %d" % fileno)
         if fileno in self.session:
@@ -235,6 +261,9 @@ class Server:
             msg['a'] = data[0]
         if msg['a'] == 'init' and len(data) == 2:
             msg['name'] = data[1]
+            return msg
+        if msg['a'] == 'check' and len(data) == 2:
+            msg['hash'] = data[1]
             return msg
         if len(data) > 4:
             msg['n'] = int(data[1])

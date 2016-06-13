@@ -4,6 +4,7 @@
         <meta charset="UTF-8" />
         <title>WebSocket test</title>
         <script type="text/javascript" src="upload.js"></script>
+        <script type="text/javascript" src="spark-md5.min.js"></script>
     </head>
     <body>
         <input type="file" id="input_ele"/>
@@ -11,6 +12,7 @@
         <script>
             var sbtn = document.getElementById("submit_btn");
             // wsUpload.url = 'ws://192.168.1.80:7000/';
+
             wsUpload.onProgress = function (i) {
                 console.log("progress " + i);
             };
