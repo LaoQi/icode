@@ -1,4 +1,5 @@
 ﻿#include "server.h"
+#include "http_parser.h"
 
 HSocket bind_socket(u_short port) {
 
@@ -27,9 +28,31 @@ HSocket bind_socket(u_short port) {
     return server_sockfd;
 }
 
+int my_url_callback(http_parser* parser, const char *at, size_t length) {
+    /* access to thread local custom_data_t struct.
+    Use this access save parsed data for later use into thread local
+    buffer, or communicate over socket
+    */
+    LOG("%d\n", parser->method);
+    return 0;
+}
+
 void main_loop(HSocket server_sockfd) {
     //client
     char buffer[BUFFER_SIZE];
+
+    http_parser_settings settings =
+    { .on_message_begin = 0
+        ,.on_header_field = 0
+        ,.on_header_value = 0
+        ,.on_url = my_url_callback
+        ,.on_status = 0
+        ,.on_body = 0
+        ,.on_headers_complete = 0
+        ,.on_message_complete = 0
+        ,.on_chunk_header = 0
+        ,.on_chunk_complete = 0
+    };
 
     while(TRUE) {
         struct sockaddr_in client_addr;
@@ -40,8 +63,21 @@ void main_loop(HSocket server_sockfd) {
             SOCPERROR("connect");
             continue;
         }
+
+        size_t len, nparsed;
+        // http parser
+        http_parser *parser = malloc(sizeof(http_parser));
+        http_parser_init(parser, HTTP_REQUEST);
+        parser->data = conn;
+
         memset(buffer,0,sizeof(buffer));
-        int len = recv(conn, buffer, sizeof(buffer),0);
+        len = recv(conn, buffer, sizeof(buffer),0);
+        nparsed = http_parser_execute(parser, &settings, buffer, len);
+        if (len < 0) {
+            LOG("%s recv error\n", inet_ntoa(client_addr.sin_addr));
+        }
+
+        LOG("%s\n", inet_ntoa(client_addr.sin_addr));
 
         char html[sizeof(HTML)];
         strcpy(html, HTML);
@@ -63,6 +99,7 @@ int main(int argc, char* argv[]) {
     }
 
     HSocket server_sockfd = bind_socket(port);
+
     if (server_sockfd < 0) {
         SOCPERROR("connect error");
         exit(3);

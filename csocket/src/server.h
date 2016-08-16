@@ -1,7 +1,7 @@
 ﻿#ifndef __SERVER_H__
 #define __SERVER_H__
 
-#ifdef WIN32
+#ifdef _WIN32
 #define PLATFORM_WIN 1
 #else
 #define PLATFORM_LINUX 1
@@ -51,18 +51,19 @@ typedef int socklen_t;
 #endif
 //////////////////////////////////////////
 
-#define DEFAULT_PORT 10000
+#define DEFAULT_PORT 9527
 #define SOCKET_BACKLOG 24
 #define BUFFER_SIZE 1024
 #define TRUE 1
 #define FALSE 0
 
 
-int main(int, char** );
+int main(int, char *argv[] );
 void main_loop(HSocket);
-int bind_socket(u_short);
+HSocket bind_socket(u_short);
 
-#define HTML "HTTP/1.1 200 OK \n\n\
+#define HTML "HTTP/1.0 200 OK \r\n\
+Server: yaoniming3000\r\n\r\n\
 <!DOCTYPE html>\n\
 <html>HelloWorld!</html> "
 
