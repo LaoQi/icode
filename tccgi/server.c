@@ -2,8 +2,9 @@
  *
  *  Tccgi  
  *  Auth : MADAO
- *  compiler by tcc link:http://bellard.org/tcc/
  *  License : GPL
+ *  compiler by tcc link:http://bellard.org/tcc/
+ *  cgi :  https://www.ietf.org/rfc/rfc3875
  *
  **********************************************************************************/
 
@@ -22,9 +23,11 @@
 #define RESPONSE_LENGTH 655360
 
 #define PATH_LENGTH 1024
+#define QUERY_STR_LEN 1024
 #define MAX_PARAMS 16
 #define PARAM_LENGTH 512
 #define MAX_HEADER 16
+#define HEADER_LENGTH 1024
 #define MAX_BODY 524288
 
 #define INDEX_PAGE "index.html"
@@ -39,8 +42,8 @@
 typedef struct _Request {
     enum { get = 1, post = 2, put = 3, delete = 4} method;
     char path[PATH_LENGTH];
-    char params[MAX_PARAMS*2][PARAM_LENGTH];
-    int params_num;
+    char query_string[QUERY_STR_LEN];
+    char params[PATH_LENGTH + QUERY_STR_LEN];
 } Request;
 
 typedef struct _Response {
@@ -52,16 +55,7 @@ typedef struct _Response {
     char body[MAX_BODY];
 } Response;
 
-void main_loop(int port);
-int parse_head(const char *data, size_t len, Request *req);
-int send_response(SOCKET conn, char* buff, Response* res);
-void http_response_code(int code, SOCKET conn);
-void reset_response(Response* res);
-int dispatch(Request *req, SOCKET conn);
-int static_file(const char* path, SOCKET conn);
-int cgi_process(const char* cmd, Request *req, SOCKET conn);
-
-#define HTTP_CODE_NUM 16
+#define HTTP_CODE_NUM 18
 char HTTP_CODE[HTTP_CODE_NUM][50] = {
     "200", "Ok",
     "400", "Bad Request",
@@ -70,6 +64,7 @@ char HTTP_CODE[HTTP_CODE_NUM][50] = {
     "405", "Method Not Allowed",
     "406", "Not Acceptable",
     "408", "Request Timeout",
+    "414", "Request-URI Too Long",
     "500", "Internal Server Error"
 };
 
@@ -84,14 +79,14 @@ char MIME_TYPE[MIME_TYPE_NUM][50] = {
 };
 char DEFAULT_TYPE[] = "application/octet-stream";
 
-char www_root[2048] = {0};
-char resbuff[RESPONSE_LENGTH] = {0};
-char cgi_ext[10] = {0};
-char cgi_buff[MAX_BODY] = {0};
-char line_buff[1024] = {0};
+char www_root[2048];
+char resbuff[RESPONSE_LENGTH];
+char cgi_ext[10];
+char cgi_buff[MAX_BODY];
+char header_buff[1024];
 Response *response;
 
-inline char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
+char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
     size_t i = 0;
     while (i < len && *cdr != '\0' && *cdr != delim) {
         *buff = *cdr;
@@ -109,7 +104,7 @@ inline char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
 
 int parse_head(const char *data, size_t len, Request *req) {
     size_t i = 0, pi = 0;
-    req->params_num = 0;
+    memset(req->query_string, '\0', QUERY_STR_LEN);
 
     char method[7];
     while (i < 6 && data[i] != ' ') {
@@ -126,7 +121,7 @@ int parse_head(const char *data, size_t len, Request *req) {
     } else if (0 == strcmp(method, "DELETE")) {
         req->method = delete;
     } else {
-        return -1;  // unknow method
+        return 2;  // unknow method
     }
 
     ++i;
@@ -135,29 +130,29 @@ int parse_head(const char *data, size_t len, Request *req) {
     }
     req->path[pi] = '\0';
 
-    if (data[i] == ' ') {
-        return 0;
+    pi = 0;
+    while(data[i] != ' ' && pi < QUERY_STR_LEN) {
+        req->query_string[pi++] = data[i++];
     }
-
-    ++i;
-    int j = 0;
-    while (i < len &&  data[i] != ' ')  {
-        if (data[i] == '+') {
-            req->params[req->params_num][j] = '\0';
-            j = 0;
-            req->params_num++;
-            if (req->params_num >= MAX_PARAMS) {
-                return -2;  // too more params
-            }
-            ++i;
-            continue;
-        }
-        req->params[req->params_num][j++] = data[i++];
-    }
-    req->params_num++;
+    req->query_string[pi] = '\0';
     return 0;
 }
 
+void build_cgi_req(Request *req, const char* path) {
+    memset(req->params, '\0', PATH_LENGTH + QUERY_STR_LEN);
+    if (strlen(req->query_string) > 1) {
+        sprintf(req->params, "%s %s", path, req->query_string + 1);
+        char* p = strchr(req->params, ' ');
+        while('\0' != *p) {
+            if ('+' == *p) {
+                *p = ' ';
+            }
+            p++;
+        }
+    } else {
+        strcpy(req->params, path);
+    }
+}
 
 void reset_response(Response* res) {
     res->code = res->header_num = res->body_length = 0;
@@ -176,21 +171,40 @@ int add_header(Response* res, const char* name, const char* value) {
 
 int send_response(SOCKET conn, char* buff, Response* res) {
     sprintf(buff, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
-    char header[1024] = {0};
+    memset(header_buff, '\0', HEADER_LENGTH);
     for(int i = 0; i < res->header_num; i++) {
-        sprintf(header, "%s: %s\r\n", res->header[i*2], res->header[i*2+1]);
-        strcat(buff, header);
+        sprintf(header_buff, "%s: %s\r\n", res->header[i*2], res->header[i*2+1]);
+        strcat(buff, header_buff);
     }
     // add length server
-    sprintf(header, 
-        "Connection: Close\r\nContent-Length: %d\r\nServer: %s %s\r\n\r\n", 
-        res->body_length, __NAME__, __VERSION__);
-    strcat(buff, header);
+    sprintf(header_buff, 
+        "Content-Length: %d\r\nServer: %s\r\nConnection: Close\r\n\r\n", 
+        res->body_length, __NAME__);
+    strcat(buff, header_buff);
     if (res->body_length > 0) {
         strcat(buff, res->body);
     } 
     send(conn, buff, strlen(buff), 0);
     return 0;
+}
+
+void http_response_code(int code, SOCKET conn) {
+    char res[255], info[50];
+    int i = 0;
+    do{
+        if (atoi(HTTP_CODE[i]) == code) {
+            sprintf(info, "%s %s", HTTP_CODE[i], HTTP_CODE[i+1]);
+            break;
+        }
+        i += 2;
+        if (i > HTTP_CODE_NUM) {
+            sprintf(info, "%s %s", "500", "Internal Server Error");
+        }
+    } while(i < HTTP_CODE_NUM);
+
+    sprintf(res, ERR_TEMPLATE, info, info);
+    send(conn, res, strlen(res), 0);
+    closesocket(conn);
 }
 
 char* mime_type(char *type, const char* path) {
@@ -231,11 +245,99 @@ int static_file(const char *path, SOCKET conn) {
     char head[160];
     char type[50];
     mime_type(type, path);
-    sprintf(head, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length:%d\r\nServer: Tccgi\r\nConnection: Close\r\n\r\n", type, length);
+    sprintf(head, "HTTP/1.1 200 Ok\r\nContent-Type: %s\r\nContent-Length:%d\r\nServer: Tccgi\r\nConnection: Close\r\n\r\n", type, length);
     send(conn, head, strlen(head), 0);
     send(conn, resbuff, length, 0);
     closesocket(conn);
     return 0;
+}
+
+int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
+    int dwRet;
+    DWORD bytesInPipe;
+    LPDWORD bytesRead;
+    
+    dwRet = WaitForSingleObject(hProcess, CGI_TIMEOUT);
+    if (dwRet == WAIT_TIMEOUT) {
+        Logln("Process timeout");
+        // test kill 通过杀死子进程释放socket
+        TerminateProcess(hProcess, 0);
+        http_response_code(408, conn);
+        return 0;
+    }
+    if (dwRet == WAIT_FAILED) {
+        Logln("Process error : %d", GetLastError());
+        return 1;
+    }
+    // reset cgi_buff
+    memset(cgi_buff, '\0', MAX_BODY);
+    if (!PeekNamedPipe(hReadPipe, cgi_buff, RESPONSE_LENGTH, &bytesRead, &bytesInPipe, NULL)) {
+        return 2;
+    }
+    // check CGI-field
+    response->code = 200;
+    strcpy(response->phrase, "Ok");
+
+    char line_buff[1024];
+    char *cdr = cgi_buff;
+    cdr = strsep_s(line_buff, cdr, '\n', 1024);
+    if (strncmp("Content-Type", line_buff, 12) == 0) {
+        char* ct = strchr(line_buff, ':');
+        if (ct == NULL || strlen(ct) < 3) {
+            return 3;
+        }
+        ++ct;
+        while(*ct == ' ') {++ct;}
+        add_header(response, "Content-Type", ct);
+    } else if (strncmp("Status", line_buff, 6) == 0) {
+        char code[4];
+        char *p = line_buff;
+        int cur = 0;
+        while(strlen(p) > 2 && cur < 3) {
+            if (*p >= '0' && *p <= '9') {
+                code[cur] = *p;
+                ++cur;
+            } else if (cur > 0) {
+                return 4;
+            }
+            ++p;
+        }
+        ++p;
+        code[cur] = '\0';
+        response->code = atoi(code);
+        strcpy(response->phrase, p);
+    } else if (strncmp("Location", line_buff, 8) == 0) {
+        // @todo
+        add_header(response, "Location", "");
+    } else {
+        Logln("Error cgi content");
+        return 5;
+    }
+    // check "\n\n"
+    int i = 0;
+    memset(header_buff, '\0', HEADER_LENGTH);
+    cdr = strsep_s(line_buff, cdr, '\n', 1024);
+    while (cdr != NULL && strlen(line_buff) > 1 && i++ < MAX_HEADER) {
+        char* p = line_buff;
+        p = strsep_s(header_buff, p, ':', 1024);
+        if (p == NULL || strlen(p) == 1) {
+            return 6;
+        }
+        while(' ' == *p) {++p;}
+        add_header(response, header_buff, p);
+        cdr = strsep_s(line_buff, cdr, '\n', 1024);
+    }
+    if (i >= MAX_HEADER || strlen(line_buff) != 1) {
+        return 10;
+    }
+    int body_length = 0;
+    if (cdr != NULL) {
+        strcpy(response->body, cdr);
+        body_length = strlen(cdr);
+    }
+    response->body_length = body_length;
+    send_response(conn, resbuff, response);
+    return  0;
 }
 
 int cgi_process(const char* cmd, Request *req, SOCKET conn) {
@@ -247,95 +349,33 @@ int cgi_process(const char* cmd, Request *req, SOCKET conn) {
     sa.bInheritHandle = TRUE; //一定要为TRUE，不然句柄不能被继承。  bug: socket 也被继承，无法关闭
 
     CreatePipe(&hReadPipe,&hWritePipe,&sa,0); //创建pipe内核对象,设置好hReadPipe,hWritePipe.
-	STARTUPINFO si;
-	PROCESS_INFORMATION pi; 
-	si.cb = sizeof(STARTUPINFO);
-	GetStartupInfo(&si); 
-	si.hStdError = hWritePipe; //设定其标准错误输出为hWritePipe
-	si.hStdOutput = hWritePipe; //设定其标准输出为hWritePipe
-	si.wShowWindow = SW_HIDE;
-	si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-	if (0 == CreateProcess(cmd, NULL, NULL, NULL, TRUE, NULL, NULL, NULL,&si,&pi)) {
-		Logln("Error create %d", GetLastError());
-		return -1;
-	}
-    hProcess = pi.hProcess;
-    int dwRet;
-    DWORD bytesInPipe;
-    LPDWORD bytesRead;
-    do {
-        dwRet = WaitForSingleObject(hProcess, CGI_TIMEOUT);
-        if (dwRet == WAIT_TIMEOUT) {
-            Logln("Process timeout : %s", cmd);
-            // test kill 通过杀死子进程释放socket
-            TerminateProcess(hProcess, 0);
-            http_response_code(408, conn);
-            break;
-        }
-        if (dwRet == WAIT_FAILED) {
-            Logln("Process error : %d", GetLastError());
-            http_response_code(500, conn);
-            break;
-        }
-        // reset cgi_buff
-        memset(cgi_buff, '\0', MAX_BODY);
-        if (!PeekNamedPipe(hReadPipe, cgi_buff, RESPONSE_LENGTH, &bytesRead, &bytesInPipe, NULL)) {
-            http_response_code(500, conn);
-            break;
-        }
-        // https://www.ietf.org/rfc/rfc3875
-        // check CGI-field
-        response->code = 200;
-        strcpy(response->phrase, "Ok");
-
-        char *cdr = cgi_buff;
-        cdr = strsep_s(line_buff, cdr, '\n', 1024);
-        if (strncmp("Content-Type", line_buff, 12) == 0) {
-            char* ct = strchr(line_buff, ':');
-            if (ct == NULL || strlen(ct) < 3) {
-                http_response_code(500, conn);
-                break;
-            }
-            add_header(response, "Content-Type", ++ct);
-        } else if (strncmp("Status", line_buff, 6) == 0) {
-            // @todo
-            response->code = 200;
-        } else if (strncmp("Location", line_buff, 8) == 0) {
-            // @todo
-            add_header(response, "Location", "");
-        } else {
-            Logln("Error cgi content");
-            http_response_code(500, conn);
-            break;
-        }
-        // check "\n\n"
-        int i = 0;
-        while (cdr != NULL && strlen(line_buff) > 1 && i++ < MAX_HEADER) {
-            cdr = strsep_s(line_buff, cdr, '\n', 1024);
-            Logln("len %d, line_buff: %s", strlen(line_buff), line_buff);
-        }
-        if (i >= MAX_HEADER || strlen(line_buff) != 1) {
-            http_response_code(500, conn);
-            break;
-        }
-        int body_length = 0;
-        if (cdr != NULL) {
-            strcpy(response->body, cdr);
-            body_length = strlen(cdr);
-        }
-        response->body_length = body_length;
-        send_response(conn, resbuff, response);
-
-    } while(0);
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi; 
+    si.cb = sizeof(STARTUPINFO);
+    GetStartupInfo(&si); 
+    si.hStdError = hWritePipe; //设定其标准错误输出为hWritePipe
+    si.hStdOutput = hWritePipe; //设定其标准输出为hWritePipe
+    si.wShowWindow = SW_HIDE;
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    Logln(req->params);
+    if (0 == CreateProcess(cmd, req->params, NULL, NULL, TRUE, NULL, NULL, NULL,&si,&pi)) {
+        Logln("Error create %d", GetLastError());
+        return -1;
+    }
+    int ret;
+    if ((ret = cgi_parse(pi.hProcess, hReadPipe, conn)) != 0) {
+        Logln("Cgi error %d", ret);
+        http_response_code(500, conn);
+    }
     
     CloseHandle(hProcess);
     CloseHandle(hReadPipe);
-	CloseHandle(hWritePipe);
-	return 0;
+    CloseHandle(hWritePipe);
+    return 0;
 }
 
 int dispatch(Request *req, SOCKET conn) {
-    char path[2048];
+    char path[PATH_LENGTH];
     strcpy(path, www_root);
     strcat(path, req->path);
     if (0 == strcmp(req->path, "/")) {
@@ -352,30 +392,12 @@ int dispatch(Request *req, SOCKET conn) {
     // cgi
     strcat(path, cgi_ext);
     if (0 == _access(path, 0)) {
+        build_cgi_req(req, path);
         return cgi_process(path, req, conn);
     }
     
     http_response_code(404, conn);
     return 0;
-}
-
-void http_response_code(int code, SOCKET conn) {
-    char res[255], info[50];
-    int i = 0;
-    do{
-        if (atoi(HTTP_CODE[i]) == code) {
-            sprintf(info, "%s %s", HTTP_CODE[i], HTTP_CODE[i+1]);
-            break;
-        }
-        i += 2;
-        if (i > HTTP_CODE_NUM) {
-            sprintf(info, "%s %s", "500", "Internal Server Error");
-        }
-    } while(i < HTTP_CODE_NUM);
-
-    sprintf(res, ERR_TEMPLATE, info, info);
-    send(conn, res, strlen(res), 0);
-    closesocket(conn);
 }
 
 void main_loop(int port) {
@@ -452,7 +474,7 @@ void main_loop(int port) {
             continue;
         }
 
-        if (parse_head(buffer, len, req) < 0) {
+        if (parse_head(buffer, len, req) != 0) {
             Logln("Bad request from %s", address);
             Logln("Recv : %s", buffer);
             http_response_code(400, conn);
