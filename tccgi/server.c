@@ -8,22 +8,24 @@
  **********************************************************************************/
 
 #define __NAME__ "Tccgi"
-#define __VERSION__ "0.1.0"
+#define __VERSION__ "0.1.1"
 
 #include <windows.h>
-#include <winsock2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "winsock2.h"
 
 #define DEFAULT_PORT 9527
 #define SOCKET_BACKLOG 24
 #define BUFFER_SIZE 8192
-#define RESPONSE_LENGTH 524288
+#define RESPONSE_LENGTH 655360
 
 #define PATH_LENGTH 1024
 #define MAX_PARAMS 16
 #define PARAM_LENGTH 512
+#define MAX_HEADER 16
+#define MAX_BODY 524288
 
 #define INDEX_PAGE "index.html"
 #define CGI_EXTNAME "cgi"
@@ -34,19 +36,30 @@
 #define SOCPERROR printf("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
 #define Logln(...) {printf(__VA_ARGS__);printf("\n");}
 
-typedef struct _ReqHead {
+typedef struct _Request {
     enum { get = 1, post = 2, put = 3, delete = 4} method;
     char path[PATH_LENGTH];
-    char params[MAX_PARAMS][PARAM_LENGTH];
+    char params[MAX_PARAMS*2][PARAM_LENGTH];
     int params_num;
-} ReqHead;
+} Request;
+
+typedef struct _Response {
+    int code;
+    int header_num;
+    int body_length;
+    char phrase[25];
+    char header[MAX_HEADER*2][PARAM_LENGTH];
+    char body[MAX_BODY];
+} Response;
 
 void main_loop(int port);
-int parse_head(const char *data, size_t len, ReqHead *req);
+int parse_head(const char *data, size_t len, Request *req);
+int send_response(SOCKET conn, char* buff, Response* res);
 void http_response_code(int code, SOCKET conn);
-int dispatch(ReqHead *req, SOCKET conn);
+void reset_response(Response* res);
+int dispatch(Request *req, SOCKET conn);
 int static_file(const char* path, SOCKET conn);
-int cgi_process(const char* cmd, ReqHead *req, SOCKET conn);
+int cgi_process(const char* cmd, Request *req, SOCKET conn);
 
 #define HTTP_CODE_NUM 16
 char HTTP_CODE[HTTP_CODE_NUM][50] = {
@@ -72,12 +85,29 @@ char MIME_TYPE[MIME_TYPE_NUM][50] = {
 char DEFAULT_TYPE[] = "application/octet-stream";
 
 char www_root[2048] = {0};
-char response[RESPONSE_LENGTH] = {0};
+char resbuff[RESPONSE_LENGTH] = {0};
 char cgi_ext[10] = {0};
-char cgi_buff[RESPONSE_LENGTH] = {0};
+char cgi_buff[MAX_BODY] = {0};
+char line_buff[1024] = {0};
+Response *response;
 
+inline char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
+    size_t i = 0;
+    while (i < len && *cdr != '\0' && *cdr != delim) {
+        *buff = *cdr;
+        ++buff; ++cdr; ++i;
+    }
+    *buff = '\0'; 
+    if (*cdr == '\0') {
+        return NULL;
+    }
+    if (i < len) {
+        ++cdr;
+    }
+    return cdr;
+}
 
-int parse_head(const char *data, size_t len, ReqHead *req) {
+int parse_head(const char *data, size_t len, Request *req) {
     size_t i = 0, pi = 0;
     req->params_num = 0;
 
@@ -128,6 +158,41 @@ int parse_head(const char *data, size_t len, ReqHead *req) {
     return 0;
 }
 
+
+void reset_response(Response* res) {
+    res->code = res->header_num = res->body_length = 0;
+}
+
+int add_header(Response* res, const char* name, const char* value) {
+    if (res->header_num < MAX_HEADER) {
+        int i = res->header_num * 2;
+        strcpy(res->header[i], name);
+        strcpy(res->header[i+1], value);
+        res->header_num += 1;
+        return 0;
+    }
+    return -1;
+}
+
+int send_response(SOCKET conn, char* buff, Response* res) {
+    sprintf(buff, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
+    char header[1024] = {0};
+    for(int i = 0; i < res->header_num; i++) {
+        sprintf(header, "%s: %s\r\n", res->header[i*2], res->header[i*2+1]);
+        strcat(buff, header);
+    }
+    // add length server
+    sprintf(header, 
+        "Connection: Close\r\nContent-Length: %d\r\nServer: %s %s\r\n\r\n", 
+        res->body_length, __NAME__, __VERSION__);
+    strcat(buff, header);
+    if (res->body_length > 0) {
+        strcat(buff, res->body);
+    } 
+    send(conn, buff, strlen(buff), 0);
+    return 0;
+}
+
 char* mime_type(char *type, const char* path) {
     char* ext = strchr(path, '.');
     if (ext == NULL) {
@@ -160,20 +225,20 @@ int static_file(const char *path, SOCKET conn) {
         return 2;
     }
     rewind(fp);
-    length = fread(response, 1, length, fp);  
-    response[length] = '\0';
+    length = fread(resbuff, 1, length, fp);  
+    resbuff[length] = '\0';
     fclose(fp);
     char head[160];
     char type[50];
     mime_type(type, path);
     sprintf(head, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length:%d\r\nServer: Tccgi\r\nConnection: Close\r\n\r\n", type, length);
     send(conn, head, strlen(head), 0);
-    send(conn, response, length, 0);
+    send(conn, resbuff, length, 0);
     closesocket(conn);
     return 0;
 }
 
-int cgi_process(const char* cmd, ReqHead *req, SOCKET conn) {
+int cgi_process(const char* cmd, Request *req, SOCKET conn) {
     HANDLE hReadPipe, hWritePipe, hProcess;
     SECURITY_ATTRIBUTES sa;
               
@@ -212,12 +277,55 @@ int cgi_process(const char* cmd, ReqHead *req, SOCKET conn) {
             http_response_code(500, conn);
             break;
         }
+        // reset cgi_buff
+        memset(cgi_buff, '\0', MAX_BODY);
         if (!PeekNamedPipe(hReadPipe, cgi_buff, RESPONSE_LENGTH, &bytesRead, &bytesInPipe, NULL)) {
             http_response_code(500, conn);
             break;
         }
-        Logln(cgi_buff);
-        http_response_code(200, conn);
+        // https://www.ietf.org/rfc/rfc3875
+        // check CGI-field
+        response->code = 200;
+        strcpy(response->phrase, "Ok");
+
+        char *cdr = cgi_buff;
+        cdr = strsep_s(line_buff, cdr, '\n', 1024);
+        if (strncmp("Content-Type", line_buff, 12) == 0) {
+            char* ct = strchr(line_buff, ':');
+            if (ct == NULL || strlen(ct) < 3) {
+                http_response_code(500, conn);
+                break;
+            }
+            add_header(response, "Content-Type", ++ct);
+        } else if (strncmp("Status", line_buff, 6) == 0) {
+            // @todo
+            response->code = 200;
+        } else if (strncmp("Location", line_buff, 8) == 0) {
+            // @todo
+            add_header(response, "Location", "");
+        } else {
+            Logln("Error cgi content");
+            http_response_code(500, conn);
+            break;
+        }
+        // check "\n\n"
+        int i = 0;
+        while (cdr != NULL && strlen(line_buff) > 1 && i++ < MAX_HEADER) {
+            cdr = strsep_s(line_buff, cdr, '\n', 1024);
+            Logln("len %d, line_buff: %s", strlen(line_buff), line_buff);
+        }
+        if (i >= MAX_HEADER || strlen(line_buff) != 1) {
+            http_response_code(500, conn);
+            break;
+        }
+        int body_length = 0;
+        if (cdr != NULL) {
+            strcpy(response->body, cdr);
+            body_length = strlen(cdr);
+        }
+        response->body_length = body_length;
+        send_response(conn, resbuff, response);
+
     } while(0);
     
     CloseHandle(hProcess);
@@ -226,13 +334,15 @@ int cgi_process(const char* cmd, ReqHead *req, SOCKET conn) {
 	return 0;
 }
 
-int dispatch(ReqHead *req, SOCKET conn) {
+int dispatch(Request *req, SOCKET conn) {
     char path[2048];
     strcpy(path, www_root);
     strcat(path, req->path);
     if (0 == strcmp(req->path, "/")) {
         strcat(path, INDEX_PAGE);
     }
+    // reset response
+    reset_response(response);
     // @todo config route
 
     // static file
@@ -314,7 +424,8 @@ void main_loop(int port) {
     Logln("Server start at %d;", port);
     //client
     char buffer[BUFFER_SIZE];
-    ReqHead *req = (ReqHead*)malloc(sizeof(ReqHead));
+    Request *req = (Request*)malloc(sizeof(Request));
+    response = (Response*)malloc(sizeof(Response));
 
     while(1) {
         struct sockaddr_in client_addr;
@@ -327,7 +438,8 @@ void main_loop(int port) {
         }
 
         size_t len;
-        memset(buffer,0,sizeof(buffer));
+
+        *buffer = '\0';
         len = recv(conn, buffer, sizeof(buffer),0);
 
         char address[50];
@@ -341,7 +453,8 @@ void main_loop(int port) {
         }
 
         if (parse_head(buffer, len, req) < 0) {
-            Logln("Bad Request");
+            Logln("Bad request from %s", address);
+            Logln("Recv : %s", buffer);
             http_response_code(400, conn);
             continue;
         }
@@ -360,6 +473,8 @@ void main_loop(int port) {
         http_response_code(500, conn);
     }
     closesocket(sock_fd);
+    free(req);
+    free(response);
 }
 
 int main(int argc, char* argv[]) {
@@ -370,6 +485,7 @@ int main(int argc, char* argv[]) {
         if (strcmp(argv[1], "-p") != 0 || argc < 3) {
             printf("Usage:\n\
  -p port\tdefault port is %d\n\
+ -t cgi timeout\tdefault is 3 seconds\n\
  -e extname\tdefault is cgi\n", DEFAULT_PORT);
             exit(1);
         } else {
