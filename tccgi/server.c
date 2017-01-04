@@ -136,6 +136,19 @@ int parse_head(const char *data, size_t len, Request *req) {
     return 0;
 }
 
+int clear_buffer(char *buffer, size_t buffsize) {
+    int i = 0, del = 0;
+    while (i + del < buffsize) {
+        buffer[i] = buffer[i + del];
+        if (buffer[i] == 13 && i + del + 1 < buffsize && buffer[i + del + 1] == 10) {
+            buffer[i] = 10;
+            ++del;
+        }
+        ++i;
+    }
+    return buffsize - del;
+}
+
 void build_cgi_req(Request *req, const char* path) {
     memset(req->params, '\0', PATH_LENGTH + QUERY_STR_LEN);
     if (strlen(req->query_string) > 1) {
@@ -172,8 +185,6 @@ int send_response(SOCKET conn, Response* res) {
     memset(header_buff, '\0', HEADER_LENGTH);
     for(int i = 0; i < res->header_num; i++) {
         sprintf(header_buff, "%s: %s\r\n", res->header[i*2], res->header[i*2+1]);
-        write(STDOUT_FILENO,res->header[i*2+1],strlen(res->header[i*2+1]));
-        Logln("header : %d, %d", i, strcmp(res->header[i*2+1], "text/html"));
         strcat(resbuff, header_buff);
     }
     // add length server
@@ -256,8 +267,7 @@ int static_file(const char *path, SOCKET conn) {
 
 int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
     int dwRet;
-    DWORD bytesInPipe;
-    LPDWORD bytesRead;
+    DWORD bytesInPipe, bytesRead;
     
     dwRet = WaitForSingleObject(hProcess, CGI_TIMEOUT);
     if (dwRet == WAIT_TIMEOUT) {
@@ -272,10 +282,12 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
         return 1;
     }
     // reset cgi_buff
-    memset(cgi_buff, '\0', MAX_BODY);
-    if (!PeekNamedPipe(hReadPipe, cgi_buff, RESPONSE_LENGTH, &bytesRead, &bytesInPipe, NULL)) {
+    memset(cgi_buff, 0, MAX_BODY);
+    if ( !PeekNamedPipe(hReadPipe, cgi_buff, MAX_BODY, &bytesRead, &bytesInPipe, NULL) ) {
         return 2;
     }
+    // conver \r\n to \n
+    clear_buffer(cgi_buff, bytesRead + 1);
     // check CGI-field
     response->code = 200;
     strcpy(response->phrase, "I'm OK");
@@ -329,13 +341,13 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
         add_header(response, header_buff, p);
         cdr = strsep_s(line_buff, cdr, '\n', 1024);
     }
-    if (i >= MAX_HEADER || strlen(line_buff) != 1) {
+    if (i >= MAX_HEADER || strlen(line_buff) > 0) {
         return 10;
     }
-    int body_length = 0;
+    size_t body_length = 0;
     if (cdr != NULL) {
-        strcpy(response->body, cdr);
         body_length = strlen(cdr);
+        strncpy(response->body, cdr, body_length);
     }
     response->body_length = body_length;
     send_response(conn, response);
