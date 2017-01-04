@@ -34,10 +34,8 @@
 #define CGI_EXTNAME "cgi"
 #define CGI_TIMEOUT 3000
 
-#define ERR_TEMPLATE "HTTP/1.1 %s\r\nContent-Type: text/html\r\nServer: Tccgi 0.1.0\r\nConnection: Close\r\n\r\n<!DOCTYPE html>\n<center><h1>%s</h1><hr>Powered By Tccgi</center>"
-
 #define SOCPERROR printf("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
-#define Logln(...) {printf(__VA_ARGS__);printf("\n");}
+#define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); write(STDOUT_FILENO,_logbuff,strlen(_logbuff)); printf("\n");} while(0);
 
 typedef struct _Request {
     enum { get = 1, post = 2, put = 3, delete = 4} method;
@@ -57,7 +55,7 @@ typedef struct _Response {
 
 #define HTTP_CODE_NUM 18
 char HTTP_CODE[HTTP_CODE_NUM][50] = {
-    "200", "Ok",
+    "200", "OK",
     "400", "Bad Request",
     "403", "Forbidden",
     "404", "Not Found",
@@ -169,22 +167,26 @@ int add_header(Response* res, const char* name, const char* value) {
     return -1;
 }
 
-int send_response(SOCKET conn, char* buff, Response* res) {
-    sprintf(buff, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
+int send_response(SOCKET conn, Response* res) {
+    sprintf(resbuff, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
     memset(header_buff, '\0', HEADER_LENGTH);
     for(int i = 0; i < res->header_num; i++) {
         sprintf(header_buff, "%s: %s\r\n", res->header[i*2], res->header[i*2+1]);
-        strcat(buff, header_buff);
+        write(STDOUT_FILENO,res->header[i*2+1],strlen(res->header[i*2+1]));
+        Logln("header : %d, %d", i, strcmp(res->header[i*2+1], "text/html"));
+        strcat(resbuff, header_buff);
     }
     // add length server
     sprintf(header_buff, 
         "Content-Length: %d\r\nServer: %s\r\nConnection: Close\r\n\r\n", 
         res->body_length, __NAME__);
-    strcat(buff, header_buff);
+        // "Server: %s\r\nConnection: Close\r\n\r\n", __NAME__);
+    strcat(resbuff, header_buff);
+    send(conn, resbuff, strlen(resbuff), 0);
     if (res->body_length > 0) {
-        strcat(buff, res->body);
+        send(conn, res->body, res->body_length, 0);
     } 
-    send(conn, buff, strlen(buff), 0);
+    closesocket(conn);
     return 0;
 }
 
@@ -202,7 +204,7 @@ void http_response_code(int code, SOCKET conn) {
         }
     } while(i < HTTP_CODE_NUM);
 
-    sprintf(res, ERR_TEMPLATE, info, info);
+    sprintf(res, "HTTP/1.1 %s\r\nContent-Type: text/html\r\nServer: %s\r\nConnection: Close\r\n\r\n<!DOCTYPE html>\n<center><h1>%s</h1><hr>Powered By Tccgi</center>", info, __NAME__, info);
     send(conn, res, strlen(res), 0);
     closesocket(conn);
 }
@@ -245,7 +247,7 @@ int static_file(const char *path, SOCKET conn) {
     char head[160];
     char type[50];
     mime_type(type, path);
-    sprintf(head, "HTTP/1.1 200 Ok\r\nContent-Type: %s\r\nContent-Length:%d\r\nServer: Tccgi\r\nConnection: Close\r\n\r\n", type, length);
+    sprintf(head, "HTTP/1.1 200 Ok\r\nContent-Type: %s\r\nContent-Length: %d\r\nServer: Tccgi\r\nConnection: Close\r\n\r\n", type, length);
     send(conn, head, strlen(head), 0);
     send(conn, resbuff, length, 0);
     closesocket(conn);
@@ -276,7 +278,7 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
     }
     // check CGI-field
     response->code = 200;
-    strcpy(response->phrase, "Ok");
+    strcpy(response->phrase, "I'm OK");
 
     char line_buff[1024];
     char *cdr = cgi_buff;
@@ -336,7 +338,7 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
         body_length = strlen(cdr);
     }
     response->body_length = body_length;
-    send_response(conn, resbuff, response);
+    send_response(conn, response);
     return  0;
 }
 
