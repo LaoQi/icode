@@ -26,6 +26,7 @@
 #define QUERY_STR_LEN 1024
 #define MAX_PARAMS 16
 #define PARAM_LENGTH 512
+#define ENV_LENGTH 8192
 #define MAX_HEADER 16
 #define HEADER_LENGTH 1024
 #define MAX_BODY 524288
@@ -34,14 +35,20 @@
 #define CGI_EXTNAME "cgi"
 #define CGI_TIMEOUT 3000
 
+#define PUSH_ENV(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%s", y, z);}
+#define PUSH_ENV_D(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%d", y, z);}
 #define SOCPERROR printf("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
 #define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); write(STDOUT_FILENO,_logbuff,strlen(_logbuff)); printf("\n");} while(0);
 
 typedef struct _Request {
-    enum { get = 1, post = 2, put = 3, delete = 4} method;
+    char method[7];
     char path[PATH_LENGTH];
     char query_string[QUERY_STR_LEN];
     char params[PATH_LENGTH + QUERY_STR_LEN];
+    char request_uri[PATH_LENGTH + QUERY_STR_LEN];
+    char remote_addr[60];
+    char script_name[PATH_LENGTH];
+    int remote_port;
 } Request;
 
 typedef struct _Response {
@@ -80,8 +87,10 @@ char DEFAULT_TYPE[] = "application/octet-stream";
 char www_root[2048];
 char resbuff[RESPONSE_LENGTH];
 char cgi_ext[10];
+size_t cgi_ext_len;
 char cgi_buff[MAX_BODY];
 char header_buff[1024];
+char lpEnv[ENV_LENGTH];
 Response *response;
 
 char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
@@ -102,34 +111,21 @@ char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
 
 int parse_head(const char *data, size_t len, Request *req) {
     size_t i = 0, pi = 0;
-    memset(req->query_string, '\0', QUERY_STR_LEN);
-
-    char method[7];
+    BOOL has_query = FALSE;
     while (i < 6 && data[i] != ' ') {
-        method[i] = data[i];
+        req->method[i] = data[i];
         ++i;
     }
-    method[i] = '\0';
-    if (0 == strcmp(method, "GET")) {
-        req->method = get;
-    } else if (0 == strcmp(method, "POST")) {
-        req->method = post;
-    } else if (0 == strcmp(method, "PUT")) {
-        req->method = put;
-    } else if (0 == strcmp(method, "DELETE")) {
-        req->method = delete;
-    } else {
-        return 2;  // unknow method
-    }
-
+    req->method[i] = '\0';
     ++i;
     while (pi < PATH_MAX && data[i] != '?' && data[i] != ' ') {
         req->path[pi++] = data[i++];
     }
     req->path[pi] = '\0';
 
-    pi = 0;
-    while(data[i] != ' ' && pi < QUERY_STR_LEN) {
+    if (data[i] == '?') has_query = TRUE;
+    ++i; pi = 0;
+    while(has_query && data[i] != ' ' && pi < QUERY_STR_LEN) {
         req->query_string[pi++] = data[i++];
     }
     req->query_string[pi] = '\0';
@@ -150,9 +146,9 @@ int clear_buffer(char *buffer, size_t buffsize) {
 }
 
 void build_cgi_req(Request *req, const char* path) {
-    memset(req->params, '\0', PATH_LENGTH + QUERY_STR_LEN);
-    if (strlen(req->query_string) > 1) {
-        sprintf(req->params, "%s %s", path, req->query_string + 1);
+    sprintf(req->script_name, "%s%s", req->path, cgi_ext);
+    if (NULL == strchr(req->query_string, '=') && strlen(req->query_string) > 1) {
+        sprintf(req->params, "%s %s", path, req->query_string);
         char* p = strchr(req->params, ' ');
         while('\0' != *p) {
             if ('+' == *p) {
@@ -165,8 +161,37 @@ void build_cgi_req(Request *req, const char* path) {
     }
 }
 
+void build_cgi_env(char* env, Request* req) {
+    memset(env, 0, ENV_LENGTH);
+    sprintf(env, "%s=%s", "SERVER_NAME", "Boom shaka Laka");
+    // env += strlen(env) + 1;
+    // sprintf(env, "%s=%s", "PATH", req->path);
+    PUSH_ENV(env, "QUERY_STRING", req->query_string);
+    PUSH_ENV(env, "SERVER_SOFTWARE", __NAME__);
+    PUSH_ENV(env, "GATEWAY_INTERFACE", "CGI/1.1");
+    PUSH_ENV(env, "SERVER_PROTOCOL", "HTTP/1.1");
+    PUSH_ENV(env, "SERVER_PORT", "9527");
+    PUSH_ENV(env, "REQUEST_METHOD", req->method);
+    PUSH_ENV(env, "PATH_INFO", req->path);
+    PUSH_ENV(env, "SCRIPT_NAME", req->script_name);
+    PUSH_ENV(env, "REMOTE_ADDR", req->remote_addr);
+    PUSH_ENV_D(env, "REMOTE_PORT", req->remote_port);
+    // PUSH_ENV(env, "REQUEST_URI", req->request_uri)
+    env = env + strlen(env);
+    sprintf(env, "%c%c", 0, 0);
+}
+
 void reset_response(Response* res) {
     res->code = res->header_num = res->body_length = 0;
+}
+
+void reset_request(Request* req) {
+    memset(req->method, 0, 7);
+    memset(req->path, 0, PATH_LENGTH);
+    memset(req->query_string, 0, QUERY_STR_LEN);
+    memset(req->params, 0, PATH_LENGTH + QUERY_STR_LEN);
+    memset(req->remote_addr, 0, 60);
+    memset(req->script_name, 0, PATH_LENGTH);
 }
 
 int add_header(Response* res, const char* name, const char* value) {
@@ -244,7 +269,7 @@ int static_file(const char *path, SOCKET conn) {
         Logln("error!");
         return 1;
     }
-    fseek(fp, 0, SEEK_END);  
+    fseek(fp, 0, SEEK_END);
     int length = ftell(fp);
     if (length >= RESPONSE_LENGTH) {
         fclose(fp);
@@ -290,7 +315,7 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
     clear_buffer(cgi_buff, bytesRead + 1);
     // check CGI-field
     response->code = 200;
-    strcpy(response->phrase, "I'm OK");
+    strcpy(response->phrase, "OK");
 
     char line_buff[1024];
     char *cdr = cgi_buff;
@@ -357,7 +382,7 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
 int cgi_process(const char* cmd, Request *req, SOCKET conn) {
     HANDLE hReadPipe, hWritePipe, hProcess;
     SECURITY_ATTRIBUTES sa;
-              
+
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.lpSecurityDescriptor = NULL; //使用系统默认的安全描述符
     sa.bInheritHandle = TRUE; //一定要为TRUE，不然句柄不能被继承。  bug: socket 也被继承，无法关闭
@@ -372,7 +397,8 @@ int cgi_process(const char* cmd, Request *req, SOCKET conn) {
     si.wShowWindow = SW_HIDE;
     si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     Logln(req->params);
-    if (0 == CreateProcess(cmd, req->params, NULL, NULL, TRUE, NULL, NULL, NULL,&si,&pi)) {
+    build_cgi_env(lpEnv, req);
+    if (0 == CreateProcess(cmd, req->params, NULL, NULL, TRUE, 0, lpEnv, NULL, &si, &pi)) {
         Logln("Error create %d", GetLastError());
         return -1;
     }
@@ -399,8 +425,12 @@ int dispatch(Request *req, SOCKET conn) {
     reset_response(response);
     // @todo config route
 
-    // static file
     if (0 == _access(path, 0)) {
+        if (strlen(req->path) > cgi_ext_len && 0 == strcmp((path + strlen(path) - cgi_ext_len), cgi_ext) ) {
+            build_cgi_req(req, path);
+            return cgi_process(path, req, conn);
+        }
+        // static file
         return static_file(path, conn);
     }
     // cgi
@@ -462,10 +492,14 @@ void main_loop(int port) {
     char buffer[BUFFER_SIZE];
     Request *req = (Request*)malloc(sizeof(Request));
     response = (Response*)malloc(sizeof(Response));
+    DWORD address_len = 60;
+    char address[60];
 
     while(1) {
         struct sockaddr_in client_addr;
         int length = sizeof(client_addr);
+
+        reset_request(req);
 
         SOCKET conn = accept(sock_fd, (SOCKADDR *)&client_addr, &length);
         if(conn<0) {
@@ -475,11 +509,9 @@ void main_loop(int port) {
 
         size_t len;
 
-        *buffer = '\0';
+        *buffer = 0;
         len = recv(conn, buffer, sizeof(buffer),0);
-
-        char address[50];
-        DWORD address_len = 50;
+        memset(address, 0, 60);
         WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, address, &address_len);
 
         if (len < 0) {
@@ -495,12 +527,19 @@ void main_loop(int port) {
             continue;
         }
 
-        Logln("ACCEPT: %s %s", address, req->path);
+        Logln("%s: %s %s", req->method, address, req->path);
 
         // just support get
-        if (req->method != get) {
+        if (0 != stricmp(req->method, "GET")) {
             http_response_code(405, conn);
             continue;
+        }
+
+        char* sep = strchr(address, ':');
+        if (sep != NULL) {
+            *sep = 0;
+            strcpy(req->remote_addr, address);
+            req->remote_port = atoi(sep+1);
         }
 
         if (dispatch(req, conn) == 0) {
@@ -517,6 +556,7 @@ int main(int argc, char* argv[]) {
 
     int port = DEFAULT_PORT;
     sprintf(cgi_ext,".%s", CGI_EXTNAME);
+    cgi_ext_len = strlen(cgi_ext);
     if (argc >= 2) {
         if (strcmp(argv[1], "-p") != 0 || argc < 3) {
             printf("Usage:\n\
