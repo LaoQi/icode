@@ -2,7 +2,7 @@
  *
  *  Tccgi  
  *  Auth : MADAO
- *  License : GPL
+ *  License : WTFPL
  *  compiler by tcc link:http://bellard.org/tcc/
  *  cgi :  https://www.ietf.org/rfc/rfc3875
  *
@@ -33,12 +33,12 @@
 
 #define INDEX_PAGE "index.html"
 #define CGI_EXTNAME "cgi"
-#define CGI_TIMEOUT 3000
+#define CGI_TIMEOUT 3
 
 #define PUSH_ENV(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%s", y, z);}
 #define PUSH_ENV_D(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%d", y, z);}
-#define SOCPERROR printf("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
-#define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); write(STDOUT_FILENO,_logbuff,strlen(_logbuff)); printf("\n");} while(0);
+#define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); write(STDOUT_FILENO,_logbuff,strlen(_logbuff)); write(STDOUT_FILENO,"\n",1);} while(0);
+#define SOCPERROR Logln("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
 
 typedef struct _Request {
     char method[7];
@@ -82,11 +82,15 @@ char MIME_TYPE[MIME_TYPE_NUM][50] = {
     "png", "image/png",
     "jpg", "image/jpeg"
 };
+
+// Global
 char DEFAULT_TYPE[] = "application/octet-stream";
+int bind_port = 9527;
+int cgi_timeout = 3;
+char cgi_ext[10];
 
 char www_root[2048];
 char resbuff[RESPONSE_LENGTH];
-char cgi_ext[10];
 size_t cgi_ext_len;
 char cgi_buff[MAX_BODY];
 char header_buff[1024];
@@ -170,7 +174,7 @@ void build_cgi_env(char* env, Request* req) {
     PUSH_ENV(env, "SERVER_SOFTWARE", __NAME__);
     PUSH_ENV(env, "GATEWAY_INTERFACE", "CGI/1.1");
     PUSH_ENV(env, "SERVER_PROTOCOL", "HTTP/1.1");
-    PUSH_ENV(env, "SERVER_PORT", "9527");
+    PUSH_ENV_D(env, "SERVER_PORT", bind_port);
     PUSH_ENV(env, "REQUEST_METHOD", req->method);
     PUSH_ENV(env, "PATH_INFO", req->path);
     PUSH_ENV(env, "SCRIPT_NAME", req->script_name);
@@ -294,7 +298,7 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
     int dwRet;
     DWORD bytesInPipe, bytesRead;
     
-    dwRet = WaitForSingleObject(hProcess, CGI_TIMEOUT);
+    dwRet = WaitForSingleObject(hProcess, cgi_timeout*1000);
     if (dwRet == WAIT_TIMEOUT) {
         Logln("Process timeout");
         // test kill 通过杀死子进程释放socket
@@ -444,11 +448,7 @@ int dispatch(Request *req, SOCKET conn) {
     return 0;
 }
 
-void main_loop(int port) {
-
-    // get root path
-    getcwd(www_root, MAX_PATH);
-    Logln("www_root : %s", www_root);
+void main_loop() {
 
     WSADATA Ws;
     if ( WSAStartup(MAKEWORD(2,2), &Ws) != 0 ) { 
@@ -461,7 +461,7 @@ void main_loop(int port) {
     //sockaddr_in
     struct sockaddr_in server_sockaddr;
     server_sockaddr.sin_family = AF_INET;
-    server_sockaddr.sin_port = htons(port);
+    server_sockaddr.sin_port = htons(bind_port);
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     int reuse0 = 1;
@@ -487,7 +487,7 @@ void main_loop(int port) {
         exit(3);
     }
 
-    Logln("Server start at %d;", port);
+    Logln("Server start...");
     //client
     char buffer[BUFFER_SIZE];
     Request *req = (Request*)malloc(sizeof(Request));
@@ -554,21 +554,35 @@ void main_loop(int port) {
 
 int main(int argc, char* argv[]) {
 
-    int port = DEFAULT_PORT;
+    bind_port = DEFAULT_PORT;
+    cgi_timeout = CGI_TIMEOUT;
     sprintf(cgi_ext,".%s", CGI_EXTNAME);
     cgi_ext_len = strlen(cgi_ext);
-    if (argc >= 2) {
-        if (strcmp(argv[1], "-p") != 0 || argc < 3) {
-            printf("Usage:\n\
- -p port\tdefault port is %d\n\
- -t cgi timeout\tdefault is 3 seconds\n\
- -e extname\tdefault is cgi\n", DEFAULT_PORT);
+    // get root path
+    getcwd(www_root, MAX_PATH);
+    if (argc > 1 && 0 == (argc%2)) {
+        printf("Usage:
+ -d root directory
+ -p port\tdefault port is %d
+ -t cgi timeout\tdefault is %d seconds
+ -e extname\tdefault is %s\n", DEFAULT_PORT, CGI_TIMEOUT, CGI_EXTNAME);
             exit(1);
-        } else {
-            port = atoi(argv[2]);
-        }
     }
-
-    main_loop(port);
+    while(argc > 2) {
+        if (0 == strcmp(argv[argc - 2], "-p") && atoi(argv[argc-1]) > 0) {
+            bind_port = atoi(argv[argc - 1]);
+        } else if (0 == strcmp(argv[argc - 2], "-t") && atoi(argv[argc - 1]) > 0) {
+            cgi_timeout = atoi(argv[argc - 1]);
+        } else if (0 == strcmp(argv[argc - 2], "-e") && strlen(argv[argc - 1]) < 10) {
+            sprintf(cgi_ext,".%s", argv[argc - 1]);
+            cgi_ext_len = strlen(argv[argc - 1]);
+        } else if (0 == strcmp(argv[argc - 2], "-d") && strlen(argv[argc - 1]) < MAX_PATH) {
+            strcpy(www_root, argv[argc - 1]);
+        }
+        argc -= 2;
+    }
+    Logln("www_root : %s\nCGI extname : %s\nBind port : %d\nCGI timeout : %d seconds",
+        www_root, cgi_ext + 1, bind_port, cgi_timeout);
+    main_loop();
     return 0;
 }
