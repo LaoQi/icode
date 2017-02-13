@@ -6,16 +6,23 @@
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         <style>
 body{margin:0; text-align: center; font-family: "Arial","Microsoft YaHei","黑体","宋体",sans-serif;}
-::selection{color:#ff5e2c;background:rgba(200,200,200,0.1);}
+::selection{color:#ff5e2c;background:rgba(200,200,200,0.05);}
 a{font-style: italic;text-decoration: underline;} a:link {color:#dfdfdf;} a:visited { color: #dfdfdf;} a:hover {color: #ff5e2c;} 
+@font-face { font-family: 'zb'; src: url('fonts/xz.woff'); }
+#banner{ width:100%; height:5em; }
 #canvas{z-index:-1;width:100%;height:100%;position:fixed;pointer-events: none;top: 0;left: 0;}
 #content{color: #dfdfdf; margin: 0 auto 0 auto; text-align: left; max-width:80em; padding: 1em 1em 1em 1em; line-height: 1.5em; word-break: break-all;word-wrap: break-word;}
 pre{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.8em; padding: 0.5em 0.8em 0.5em 0.8em; overflow: auto; }
 pre>code{ background-color:rgba(200,200,200, 0); }
 code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em; padding: 0.5em 0.8em 0.5em 0.8em;}
+
+#zb { font-family: 'zb'; 
+    /*Writing-mode:tb-rl; */
+Text-align:left; font-size:3em; color: rgba(0,0,0,0.12); user-select:none;-moz-user-select:none;-webkit-user-select:none; }
         </style>
-    <body>
     </head>
+    <body>
+        <div id="banner"><div id="zb">天下逼共一石君独占八斗</div></div>
         <div id="content">
             <!--<script crossorigin="anonymous" src="http://139.199.175.147:9080/nebula/marked.min.js" integrity="sha256-c6mIBJmjwIEMzRFz4hJTWcWDvcGnqJUicbkA6bsQoYE=" type="text/javascript"></script>-->
             <script crossorigin="anonymous" src="https://cdn.bootcss.com/marked/0.3.6/marked.min.js" integrity="sha256-mJAzKDq6kSoKqZKnA6UNLtPaIj8zT2mFnWu/GSouhgQ="></script>
@@ -36,21 +43,12 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
             /** Refer to http://codepen.io/jackrugile/pen/BjBGoM **/
             var canvas = document.getElementById('canvas'),
             ctx = canvas.getContext('2d'), stars = [], count = 0,
-            maxStars = 256;
+            maxStars = 512;
             canvas.width = screen.width;
             canvas.height = screen.height;
 
-            function random(min, max) {
-                if (arguments.length < 2) {
-                    max = min;
-                    min = 0;
-                }
-                if (min > max) {
-                    var hold = max;
-                    max = min;
-                    min = hold;
-                }
-                return Math.floor(Math.random() * (max - min + 1)) + min;
+            function random(n) {
+                return Math.floor(Math.random() * (n + 1));
             }
 
             function orbit(x, y) {
@@ -71,6 +69,7 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
             }
 
             var Star = function() {
+                this.meteor = false;
                 this.canvas = document.createElement('canvas');
                 var sctx = this.canvas.getContext('2d');
                 this.canvas.width = 50;
@@ -78,13 +77,19 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
 
                 this.orbitRadius = orbit(canvas.width/4, canvas.width/8);
                 //this.orbitRadius = orbit(screen.width, screen.height);
-                this.radius = random(1, this.orbitRadius) / 12;
+                this.radius = (random(this.orbitRadius - 1) + 1) / 12;
                 this.radius = this.radius > 30 ? 30 : this.radius;
                 this.orbitX = canvas.width / 2;
                 this.orbitY = canvas.height / 2;
-                this.timePassed = random(0, maxStars);
-                this.speed = random(this.orbitRadius) / 5000000;
-                this.alpha = random(2, 10) / 10;
+                this.timePassed = random(maxStars);
+                if (random(1000) < 30) {
+                    this.meteor = true;
+                    this.speed = random(this.orbitRadius) / 50000;
+                } else {
+                    this.speed = random(this.orbitRadius) / 5000000;
+                }
+                // this.speed = random(this.orbitRadius) / 50000;
+                this.alpha = (random(8) + 2) / 10;
                 this.hue = random(360);
 
                 var half = this.canvas.width / 2;
@@ -104,9 +109,10 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
             }
 
             Star.prototype.draw = function() {
-                var x = Math.sin(this.timePassed + 0.5) * this.orbitRadius + this.orbitX,
+                var seed = Math.random();
+                var x = this.orbitX - Math.sin(this.timePassed + 0.5) * this.orbitRadius,
                     y = Math.cos(this.timePassed) * this.orbitRadius/2 + this.orbitY,
-                    twinkle = random(5);
+                    twinkle = Math.floor(5*seed);
 
                 if (twinkle === 1 && this.alpha > 0) {
                     this.alpha -= 0.01;
@@ -117,6 +123,23 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
                 ctx.globalAlpha = this.alpha;
                 ctx.drawImage(this.canvas, x - this.radius / 2, y - this.radius / 2, this.radius/2, this.radius/2);
                 this.timePassed += this.speed;
+                this.orbitRadius += this.speed * 50;
+                if(this.meteor){
+                    if (this.orbitRadius > 3000) {
+                        if (Math.floor(10*seed) < 5) {
+                            this.orbitRadius = Math.floor(500*seed);
+                            this.meteor = false;
+                            this.speed = Math.floor(this.orbitRadius*seed) / 5000000;
+                        } else {
+                            this.orbitRadius = Math.floor(800*seed);
+                        }
+                    }
+                } else {
+                    if (Math.floor(50000000*seed) < 10) {
+                        this.meteor = true;
+                        this.speed = this.orbitRadius/80000;
+                    }
+                }
             }
 
             function animation() {

@@ -1,8 +1,5 @@
 # acme-tiny
 
-[![Build Status](https://travis-ci.org/diafygi/acme-tiny.svg)](https://travis-ci.org/diafygi/acme-tiny)
-[![Coverage Status](https://coveralls.io/repos/diafygi/acme-tiny/badge.svg?branch=master&service=github)](https://coveralls.io/github/diafygi/acme-tiny?branch=master)
-
 This is a tiny, auditable script that you can throw on your server to issue
 and renew [Let's Encrypt](https://letsencrypt.org/) certificates. Since it has
 to be run on your server and have access to your private Let's Encrypt account
@@ -11,12 +8,10 @@ The only prerequisites are python and openssl.
 
 **PLEASE READ THE SOURCE CODE! YOU MUST TRUST IT WITH YOUR PRIVATE KEYS!**
 
-##Donate
+## Donate
 
 If this script is useful to you, please donate to the EFF. I don't work there,
 but they do fantastic work.
-
-[https://eff.org/donate/](https://eff.org/donate/)
 
 ## How to use this script
 
