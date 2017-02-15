@@ -4,25 +4,20 @@
         <title>webgl</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-        <script>window.d = [[11,0x329],[3,0x3],[14,0x23c],[9,0x171],[-1, 0],[13,0x9f3],[10,0x21b],[13,0x4ec],[10,0x160],[9,0x16b],[12,0x797]],window.c=String.fromCharCode</script>
         <style>
 body{margin:0; text-align: center; font-family: "Arial","Microsoft YaHei","黑体","宋体",sans-serif;}
 ::selection{color:#ff5e2c;background:rgba(200,200,200,0.05);}
 a{font-style: italic;text-decoration: underline;} a:link {color:#dfdfdf;} a:visited { color: #dfdfdf;} a:hover {color: #ff5e2c;} 
-@font-face { font-family: 'zb'; src: url('fonts/xz.woff'); }
-#banner{ text-align: center; }
-#zb { font-family: 'zb'; margin: 1em auto 0 auto; max-width: 11em; writing-mode:tb-rl; 
-    font-size:3.6em; color: rgba(0,0,0,0.15); user-select:none;-moz-user-select:none;-webkit-user-select:none; }
+#banner{ background-color: rgba(233,233,233,0.1); padding-top: 1em; padding-bottom: 1em;}
 #canvas{z-index:-1;width:100%;height:100%;position:fixed;pointer-events: none;top: 0;left: 0;}
 #content{color: #dfdfdf; margin: 0 auto 0 auto; text-align: left; max-width:80em; padding: 1em 1em 1em 1em; line-height: 1.5em; word-break: break-all;word-wrap: break-word;}
 pre{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.8em; padding: 0.5em 0.8em 0.5em 0.8em; overflow: auto; }
 pre>code{ background-color:rgba(200,200,200, 0); }
-code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em; padding: 0.5em 0.8em 0.5em 0.8em;}
+code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em; padding: 0.5em 0.8em 0.5em 0;}
         </style>
     </head>
     <body>
-        <div id="banner"></div>
-        <div id="zb"><script> (function(d){return d.reduce(function(a,b){return a+c((1<<b[0])+b[1]+0x4e00)}, '')})(d)</script></div>
+        <div id="banner"><h1>This is banner</h1></div>
         <div id="content">
             <script crossorigin="anonymous" src="http://139.199.175.147:9080/nebula/marked.min.js" integrity="sha256-c6mIBJmjwIEMzRFz4hJTWcWDvcGnqJUicbkA6bsQoYE=" type="text/javascript"></script>
             <script>
@@ -34,7 +29,7 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
             }
             ele = document.createElement('script');
             ele.type = "text/javascript";
-            ele.src = "/nebula/mark.php?callback=decode";
+            ele.src = "/nebula/mark.php";
             document.head.appendChild(ele);
             </script>
         </div>
@@ -45,7 +40,6 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
             maxStars = 512;
             canvas.width = screen.width;
             canvas.height = screen.height;
-            ctx.backtext = (function(d){return d.reduce(function(a,b){return a+c((1<<b[0])+b[1]+0x4e00)}, '')})(d);
 
             function random(n) {
                 return Math.floor(Math.random() * (n + 1));
@@ -144,14 +138,9 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
 
             function animation() {
 
-                if (count < maxStars) {
-                    if (random(15) == 1) {
-                        //for (var i = 0; i < 1; i++) {
-                            new Star();
-                        //}
-                    }
+                if (count < maxStars && random(15) == 1) {
+                    new Star();
                 }
-
                 ctx.globalCompositeOperation = 'source-over';
                 ctx.globalAlpha = 0.8;
                 ctx.fillStyle = '#232323';
@@ -161,18 +150,7 @@ code{color: #b1b1b1; background-color:rgba(200,200,200,0.1);border-radius: 0.4em
                 for (var i = 1, l = count; i < l; i++) {
                     stars[i].draw();
                 };
-
-                ctx.globalAlpha = 1;
-                ctx.font = "Bold 3em zb"; 
-                ctx.textAlign = "left";
-                ctx.fillStyle = "#111";
-                ctx.fillText(ctx.backtext, 10, canvas.height); 
-
                 window.requestAnimationFrame(animation);
-            }
-            window.onresize = function() {
-                //w = canvas.width = window.innerWidth;
-                //h = canvas.height = window.innerHeight;
             }
             animation();
         </script></canvas>
