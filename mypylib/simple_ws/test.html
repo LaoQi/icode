@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>WebSocket test</title>
+        <script type="text/javascript" src="upload.js"></script>
+        <script type="text/javascript" src="spark-md5.min.js"></script>
+    </head>
+    <body>
+        <input type="file" id="input_ele"/>
+        <button id="submit_btn">提交</button>
+        <script>
+            var sbtn = document.getElementById("submit_btn");
+            // wsUpload.url = 'ws://192.168.1.80:7000/';
+
+            wsUpload.onProgress = function (i) {
+                console.log("progress " + i);
+            };
+            wsUpload.onEnd = function () {
+                console.log("use time : " + (wsUpload.endtime.getTime() - wsUpload.starttime.getTime()))
+            };
+            sbtn.onclick = function () {
+                wsUpload.submit("input_ele");
+            };
+        </script>
+    </body>
+</html>

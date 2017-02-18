@@ -1,7 +1,7 @@
 ﻿#ifndef __SERVER_H__
 #define __SERVER_H__
 
-#ifdef WIN32
+#ifdef _WIN32
 #define PLATFORM_WIN 1
 #else
 #define PLATFORM_LINUX 1
@@ -12,6 +12,9 @@
 #include <string.h>
 
 #ifdef PLATFORM_LINUX
+/////////////////////////////////////////
+//PLATFORM_LINUX
+/////////////////////////////////////////
 #include <netinet/in.h>
 #include <unistd.h>
 typedef int HSocket;
@@ -24,7 +27,11 @@ typedef int HSocket;
 
 #define LOG(...) do{ char log_buff[1024]; sprintf(log_buff, __VA_ARGS__); fputs(log_buff, stdout); }while(0)
 #endif
+/////////////////////////////////////////
 
+////////////////////////////////////////
+//WIN32
+////////////////////////////////////////
 #ifdef PLATFORM_WIN
 #pragma comment(lib,"ws2_32.lib")
 #include <WinSock2.h>
@@ -42,19 +49,21 @@ typedef int socklen_t;
 
 #define LOG(...) do{ char log_buff[1024]; sprintf_s(log_buff, 1024, __VA_ARGS__); fputs(log_buff, stdout); }while(0)
 #endif
+//////////////////////////////////////////
 
-#define DEFAULT_PORT 8888
+#define DEFAULT_PORT 9527
 #define SOCKET_BACKLOG 24
 #define BUFFER_SIZE 1024
 #define TRUE 1
 #define FALSE 0
 
 
-int main(int, char** );
+int main(int, char *argv[] );
 void main_loop(HSocket);
-int bind_socket(u_short);
+HSocket bind_socket(u_short);
 
-#define HTML "HTTP/1.1 200 OK \n\n\
+#define HTML "HTTP/1.0 200 OK \r\n\
+Server: yaoniming3000\r\n\r\n\
 <!DOCTYPE html>\n\
 <html>HelloWorld!</html> "
 
