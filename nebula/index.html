@@ -52,14 +52,15 @@ pre>code{ background-color:rgba(200,200,200, 0); padding: 0.2em 0.2em 0.2em 0; }
         <div id="content">
             <script crossorigin="anonymous" src="http://139.199.175.147:9080/nebula/marked.min.js" integrity="sha256-c6mIBJmjwIEMzRFz4hJTWcWDvcGnqJUicbkA6bsQoYE=" type="text/javascript"></script>
             <script>
-            request('/nebula/mark.php', function(data){
+            var failed = function(){document.getElementById("content").innerHTML = marked("## 看起来出了一点问题");};
+            request('http://192.168.2.80/nebula/mark.php', function(data){
                 var rv = decode(data);
                 if (rv) {
                     document.getElementById("content").innerHTML = marked(rv);
                 } else {
-                    document.getElementById("content").innerHTML = marked("## 看起来出了一点问题");
+                    failed();
                 }
-            });
+            }, failed);
             </script>
         </div>
         <canvas id="canvas">
