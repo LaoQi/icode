@@ -14,31 +14,60 @@
             arena.width = 100, arena.height = 240;
             var ctx = arena.getContext('2d');
             var last = 0;
+            var blocks = [
+                [[0,0],[1,0],[2,0],[3,0]],
+                [[0,1],[0,0],[1,0],[2,0]],
+                [[1,1],[0,0],[1,0],[2,0]],
+                [[2,1],[0,0],[1,0],[2,0]],
+                [[1,1],[2,1],[0,0],[1,0]],
+                [[0,1],[1,1],[1,0],[2,0]],
+                [[0,1],[1,1],[0,0],[1,0]],
+            ];
             
-            var buffer = (new Array(24)).map(function(col){ 
-                return (new Array(10)).fill(0)
-            });
+            var buffer = [];
+            for (var i = 0; i < 24; i++ ) {
+                buffer.push((new Array(10)).fill(0))
+            }
             var fall = [];
+            var center = {x:4, y:2};
 
-            function test(t) {
-                fall.push({x:0, y:0});
+            function next(t) {
+                var able = true;
+                center.x = 4; center.y = 2;
+                blocks[t].map(function(dot){
+                    var x = dot[0] + center.x;
+                    var y = dot[1] + center.y;
+                    if (buffer[y][x] > 0) {
+                        able = false;
+                    }
+                    buffer[y][x] += 1;
+                    fall.push({x:x, y:y});
+                });
+                return able;
             }
 
             function logic(timestamp) {
-                if (timestamp - last < 1000) {
+                if (timestamp - last < 400) {
                     return;
                 }
                 last = timestamp;
                 var able = fall.reduce(function(a, dot){
-                    return a && dot.y < 23 && buffer[dot.y + 1][dot.x] == 0
+                    var owner = fall.reduce(function(b, odot){
+                        return b || (dot.x == odot.x && dot.y+1 == odot.y);
+                    }, false);
+                    return a && dot.y < 23 && (buffer[dot.y + 1][dot.x] == 0 || owner)
                 }, true);
                 if (able) {
                     fall.map(function(dot){
-                        buffer[dot.y][dot.x] = 0;
+                        buffer[dot.y][dot.x] -= 1;
                         dot.y += 1;
-                        console.log(dot.y, dot.x)
-                        buffer[dot.y][dot.x] = 1;
+                        center.y += 1;
+                        buffer[dot.y][dot.x] += 1;
                     })
+                } else {
+                    while (fall.length > 0) {
+                        fall.pop();
+                    }
                 }
             }
             
@@ -49,13 +78,13 @@
                 buffer.map(function(row, y) {
                     row.map(function(t, x){
                         ctx.fillStyle = t == 0 ? '#fff' : '#000';
-                        ctx.fillRect(x*10, y*10, 9, 9);
+                        ctx.fillRect(x*10 + 0.5, y*10 + 0.5, 9, 9);
                     });
                 });
                 requestAnimationFrame(update);
             }
 
-            update();
+            requestAnimationFrame(update);
             </script>
         </canvas>
     </body>
