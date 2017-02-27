@@ -4,7 +4,7 @@
         <meta charset="utf-8"/>
         <title>Tetris</title>
         <style>
-        #arena{}
+        #arena{width: 300px; height: 720px;}
         </style>
     </head>
     <body>
@@ -145,7 +145,7 @@
                         move(1);
                         break;
                     case 40:
-                        console.log('down')
+                        last=0;logic(1000);
                         break;
                     default:
                         if (!running) restart();
