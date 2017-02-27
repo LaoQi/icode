@@ -15,31 +15,42 @@
             var ctx = arena.getContext('2d');
             var MaxX = 10, MaxY = 24;
             var last = 0;
-            var level = 1;
+            var level = 5;
+            var score = 0;
+            var running = false;
             var blocks = [
                 // l
-                [
-                    [[0,0],[1,0],[2,0],[3,0]],
-                    [[0,0],[0,1],[0,2],[0,3]],
-                ],
+                [[[0,0],[1,0],[2,0],[3,0]],[[0,0],[0,1],[0,2],[0,3]],],
                 //T
                 [
                     [[0,1],[1,1],[2,1],[1,0]],
                     [[1,0],[1,1],[1,2],[2,1]],
                     [[0,0],[1,0],[2,0],[1,1]],
-                    [[1,0],[1,1],[1,2],[0,1]],
+                    [[0,1],[1,0],[1,1],[1,2]],
                 ],
+                //L
                 [
-                    [[1,1],[0,0],[1,0],[2,0]],
+                    [[0,1],[0,0],[1,0],[2,0]],
+                    [[0,0],[1,0],[1,1],[1,2]],
+                    [[2,0],[0,1],[1,1],[2,1]],
+                    [[0,0],[0,1],[0,2],[1,2]],
                 ],
+                //lL
                 [
                     [[2,1],[0,0],[1,0],[2,0]],
+                    [[0,2],[1,0],[1,1],[1,2]],
+                    [[0,0],[0,1],[1,1],[2,1]],
+                    [[0,0],[1,0],[0,1],[0,2]],
                 ],
+                //Z
                 [
                     [[1,1],[2,1],[0,0],[1,0]],
+                    [[1,0],[0,1],[1,1],[0,2]],
                 ],
+                //S
                 [
                     [[0,1],[1,1],[1,0],[2,0]],
+                    [[0,0],[0,1],[1,1],[1,2]],
                 ],
                 [
                     [[0,1],[1,1],[0,0],[1,0]],
@@ -118,6 +129,8 @@
                         buffer[i][j] = 0;
                     }
                 }
+                running = true;
+                score = 0;
             }
             
             window.onkeydown = function(e) {
@@ -135,13 +148,13 @@
                         console.log('down')
                         break;
                     default:
-                        // restart();
+                        if (!running) restart();
                         break;
                 }
             }
 
             function logic(timestamp) {
-                if (timestamp - last < 1000/level) {
+                if (!running || timestamp - last < 1000/level) {
                     return;
                 }
                 last = timestamp;
@@ -168,6 +181,7 @@
                             if (buffer[i].reduce(function(a, v){return a && v > 0;}, true)) {
                                 row = i;
                                 buffer[i].fill(0);
+                                score += 1;
                             }
                         } else {
                             buffer[i].map(function(v, j){
@@ -178,8 +192,10 @@
                 }
                 if (fall.length == 0) {
                     var r = Math.floor(Math.random()*blocks.length);
-                    r = 1;
-                    next(r);
+                    if (!next(r)){
+                        running = false;
+                        console.log('failed score : ' + score);
+                    }
                 }
             }
             
