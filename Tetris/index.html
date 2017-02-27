@@ -9,32 +9,97 @@
     </head>
     <body>
         <canvas id="arena">
-            <script>
+            <script>11111
             var arena = document.getElementById('arena');
             arena.width = 100, arena.height = 240;
             var ctx = arena.getContext('2d');
+            var MaxX = 10, MaxY = 24;
             var last = 0;
+            var level = 1;
             var blocks = [
-                [[0,0],[1,0],[2,0],[3,0]],
-                [[0,1],[0,0],[1,0],[2,0]],
-                [[1,1],[0,0],[1,0],[2,0]],
-                [[2,1],[0,0],[1,0],[2,0]],
-                [[1,1],[2,1],[0,0],[1,0]],
-                [[0,1],[1,1],[1,0],[2,0]],
-                [[0,1],[1,1],[0,0],[1,0]],
+                // l
+                [
+                    [[0,0],[1,0],[2,0],[3,0]],
+                    [[0,0],[0,1],[0,2],[0,3]],
+                ],
+                //T
+                [
+                    [[0,1],[1,1],[2,1],[1,0]],
+                    [[1,0],[1,1],[1,2],[2,1]],
+                    [[0,0],[1,0],[2,0],[1,1]],
+                    [[1,0],[1,1],[1,2],[0,1]],
+                ],
+                [
+                    [[1,1],[0,0],[1,0],[2,0]],
+                ],
+                [
+                    [[2,1],[0,0],[1,0],[2,0]],
+                ],
+                [
+                    [[1,1],[2,1],[0,0],[1,0]],
+                ],
+                [
+                    [[0,1],[1,1],[1,0],[2,0]],
+                ],
+                [
+                    [[0,1],[1,1],[0,0],[1,0]],
+                ]
             ];
             
             var buffer = [];
-            for (var i = 0; i < 24; i++ ) {
-                buffer.push((new Array(10)).fill(0))
+            for (var i = 0; i < MaxY; i++ ) {
+                buffer.push((new Array(MaxX)).fill(0))
             }
             var fall = [];
-            var center = {x:4, y:2};
+            var center = {x:0, y:0};
+            var type = 0;
+            var mode = 0;
+
+            function move(step) {
+                var arrival = fall.reduce(function(a, dot){
+                    var x = dot.x + step;
+                    var owner = fall.reduce(function(b, odot){
+                        return b || (x == odot.x && dot.y == odot.y);
+                    }, false);
+                    return a && x >= 0 && x < MaxX && (buffer[dot.y][x] == 0 || owner); 
+                }, true);
+                if (arrival) {
+                    fall.map(function(dot){
+                        buffer[dot.y][dot.x] -= 1;
+                        dot.x += step;
+                        buffer[dot.y][dot.x] += 1;
+                    })
+                    center.x += step;
+                }
+            }
+
+            function turn() {
+                var nmode = mode + 1 < blocks[type].length ? mode + 1 : 0;
+                var arrival = blocks[type][nmode].reduce(function(a, dot){
+                    var x = dot[0] + center.x;
+                    var y = dot[1] + center.y;
+                    var owner = fall.reduce(function(b, odot){
+                        return b || (x == odot.x && y == odot.y);
+                    }, false);
+                    return a && x >= 0 && x < MaxX && y < MaxY && (buffer[y][x] == 0 || owner);
+                }, true);
+                if (arrival) {
+                    mode = nmode;
+                    blocks[type][nmode].map(function(dot, i){
+                        buffer[fall[i].y][fall[i].x] -= 1;
+                        fall[i].x = dot[0] + center.x;
+                        fall[i].y = dot[1] + center.y;
+                        buffer[fall[i].y][fall[i].x] += 1;
+                    });
+                }
+            }
 
             function next(t) {
                 var able = true;
-                center.x = 4; center.y = 2;
-                blocks[t].map(function(dot){
+                center.x = 3; center.y = 0;
+                type = t;
+                mode = Math.floor(Math.random()*blocks[t].length);
+                blocks[t][mode].map(function(dot){
                     var x = dot[0] + center.x;
                     var y = dot[1] + center.y;
                     if (buffer[y][x] > 0) {
@@ -46,8 +111,37 @@
                 return able;
             }
 
+            function restart() {
+                while(fall.length > 0) {fall.pop();};
+                for (var i=0; i < MaxY; i++) {
+                    for (var j=0; j < MaxX; j++) {
+                        buffer[i][j] = 0;
+                    }
+                }
+            }
+            
+            window.onkeydown = function(e) {
+                switch(e.keyCode) {
+                    case 37:
+                        move(-1);
+                        break;
+                    case 38:
+                        turn();
+                        break;
+                    case 39:
+                        move(1);
+                        break;
+                    case 40:
+                        console.log('down')
+                        break;
+                    default:
+                        // restart();
+                        break;
+                }
+            }
+
             function logic(timestamp) {
-                if (timestamp - last < 400) {
+                if (timestamp - last < 1000/level) {
                     return;
                 }
                 last = timestamp;
@@ -61,13 +155,31 @@
                     fall.map(function(dot){
                         buffer[dot.y][dot.x] -= 1;
                         dot.y += 1;
-                        center.y += 1;
                         buffer[dot.y][dot.x] += 1;
                     })
+                    center.y += 1;
                 } else {
                     while (fall.length > 0) {
                         fall.pop();
                     }
+                    var row = -1;
+                    for (var i=MaxY-1; i>=0; i--) {
+                        if (row < 0) {
+                            if (buffer[i].reduce(function(a, v){return a && v > 0;}, true)) {
+                                row = i;
+                                buffer[i].fill(0);
+                            }
+                        } else {
+                            buffer[i].map(function(v, j){
+                                v > 0 && fall.push({x:j, y:i});
+                            });
+                        }
+                    }
+                }
+                if (fall.length == 0) {
+                    var r = Math.floor(Math.random()*blocks.length);
+                    r = 1;
+                    next(r);
                 }
             }
             
