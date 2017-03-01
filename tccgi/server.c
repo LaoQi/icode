@@ -88,6 +88,7 @@ char DEFAULT_TYPE[] = "application/octet-stream";
 int bind_port = 9527;
 int cgi_timeout = 3;
 char cgi_ext[10];
+BOOL verbose = FALSE;
 
 char www_root[2048];
 char resbuff[RESPONSE_LENGTH];
@@ -519,6 +520,11 @@ void main_loop() {
             http_response_code(400, conn);
             continue;
         }
+        
+        if (verbose) {
+            Logln("\r\n%s", buffer);
+        }
+        
 
         if (parse_head(buffer, len, req) != 0) {
             Logln("Bad request from %s", address);
@@ -527,7 +533,10 @@ void main_loop() {
             continue;
         }
 
-        Logln("%s: %s %s", req->method, address, req->path);
+        if (!verbose) {
+            Logln("%s: %s %s", req->method, address, req->path);
+        }
+        
 
         // just support get
         if (0 != stricmp(req->method, "GET")) {
@@ -560,27 +569,39 @@ int main(int argc, char* argv[]) {
     cgi_ext_len = strlen(cgi_ext);
     // get root path
     getcwd(www_root, MAX_PATH);
-    if (argc > 1 && 0 == (argc%2)) {
+    while(argc > 1) {
+        if (0 == strcmp(argv[argc - 1], "-v")) {
+            verbose = TRUE;
+            argc -= 1;
+            continue;
+        }
+        if (argc > 2) {
+            if (0 == strcmp(argv[argc - 2], "-p") && atoi(argv[argc-1]) > 0) {
+                bind_port = atoi(argv[argc - 1]);
+            } else if (0 == strcmp(argv[argc - 2], "-t") && atoi(argv[argc - 1]) > 0) {
+                cgi_timeout = atoi(argv[argc - 1]);
+            } else if (0 == strcmp(argv[argc - 2], "-e") && strlen(argv[argc - 1]) < 10) {
+                sprintf(cgi_ext,".%s", argv[argc - 1]);
+                cgi_ext_len = strlen(argv[argc - 1]);
+            } else if (0 == strcmp(argv[argc - 2], "-d") && strlen(argv[argc - 1]) < MAX_PATH) {
+                strcpy(www_root, argv[argc - 1]);
+            }
+            argc -= 2;
+            continue;
+        }
+        break;
+    }
+    
+    if (argc > 1) {
         printf("Usage:
  -d root directory
  -p port\tdefault port is %d
  -t cgi timeout\tdefault is %d seconds
- -e extname\tdefault is %s\n", DEFAULT_PORT, CGI_TIMEOUT, CGI_EXTNAME);
+ -e extname\tdefault is %s
+ -v verbose\n", DEFAULT_PORT, CGI_TIMEOUT, CGI_EXTNAME);
             exit(1);
     }
-    while(argc > 2) {
-        if (0 == strcmp(argv[argc - 2], "-p") && atoi(argv[argc-1]) > 0) {
-            bind_port = atoi(argv[argc - 1]);
-        } else if (0 == strcmp(argv[argc - 2], "-t") && atoi(argv[argc - 1]) > 0) {
-            cgi_timeout = atoi(argv[argc - 1]);
-        } else if (0 == strcmp(argv[argc - 2], "-e") && strlen(argv[argc - 1]) < 10) {
-            sprintf(cgi_ext,".%s", argv[argc - 1]);
-            cgi_ext_len = strlen(argv[argc - 1]);
-        } else if (0 == strcmp(argv[argc - 2], "-d") && strlen(argv[argc - 1]) < MAX_PATH) {
-            strcpy(www_root, argv[argc - 1]);
-        }
-        argc -= 2;
-    }
+    
     Logln("www_root : %s\nCGI extname : %s\nBind port : %d\nCGI timeout : %d seconds",
         www_root, cgi_ext + 1, bind_port, cgi_timeout);
     main_loop();

@@ -37,12 +37,13 @@ cgi支持`Content-Type`与`Status`头部，不支持`Location`头
   
 ### 执行：
 ```  
-server.exe [-d www_root | -p port | -t cgi_timeout | -e cgi_extname]
+server.exe [-d www_root | -p port | -t cgi_timeout | -e cgi_extname | -v]
 Usage:
 -d root directory
 -p port        default port is 9527
 -t cgi timeout default is 3 seconds
 -e extname     default is cgi
+-v verbose
 ```  
 
 ### License : WTFPL 
