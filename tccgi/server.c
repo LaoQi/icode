@@ -60,6 +60,12 @@ typedef struct _Response {
     char body[MAX_BODY];
 } Response;
 
+typedef struct _Client {
+    Response response;
+    Request request;
+    SOCKET conn;
+} Client;
+
 #define HTTP_CODE_NUM 18
 char HTTP_CODE[HTTP_CODE_NUM][50] = {
     "200", "OK",
@@ -91,12 +97,7 @@ char cgi_ext[10];
 BOOL verbose = FALSE;
 
 char www_root[2048];
-char resbuff[RESPONSE_LENGTH];
 size_t cgi_ext_len;
-char cgi_buff[MAX_BODY];
-char header_buff[1024];
-char lpEnv[ENV_LENGTH];
-Response *response;
 
 char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
     size_t i = 0;
@@ -211,6 +212,8 @@ int add_header(Response* res, const char* name, const char* value) {
 }
 
 int send_response(SOCKET conn, Response* res) {
+    char *resbuff = (char*)malloc(sizeof(char)*RESPONSE_LENGTH);
+    char header_buff[1024];
     sprintf(resbuff, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
     memset(header_buff, '\0', HEADER_LENGTH);
     for(int i = 0; i < res->header_num; i++) {
@@ -228,6 +231,7 @@ int send_response(SOCKET conn, Response* res) {
         send(conn, res->body, res->body_length, 0);
     } 
     closesocket(conn);
+    free(resbuff);
     return 0;
 }
 
@@ -282,6 +286,7 @@ int static_file(const char *path, SOCKET conn) {
         return 2;
     }
     rewind(fp);
+    char *resbuff = (char*)malloc(sizeof(char)*RESPONSE_LENGTH);
     length = fread(resbuff, 1, length, fp);  
     resbuff[length] = '\0';
     fclose(fp);
@@ -292,12 +297,16 @@ int static_file(const char *path, SOCKET conn) {
     send(conn, head, strlen(head), 0);
     send(conn, resbuff, length, 0);
     closesocket(conn);
+    free(resbuff);
     return 0;
 }
 
-int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
+int cgi_parse(Response* response, HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
     int dwRet;
     DWORD bytesInPipe, bytesRead;
+    char cgi_buff[MAX_BODY];
+    char header_buff[1024];
+    char line_buff[1024];
     
     dwRet = WaitForSingleObject(hProcess, cgi_timeout*1000);
     if (dwRet == WAIT_TIMEOUT) {
@@ -322,7 +331,6 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
     response->code = 200;
     strcpy(response->phrase, "OK");
 
-    char line_buff[1024];
     char *cdr = cgi_buff;
     cdr = strsep_s(line_buff, cdr, '\n', 1024);
     if (strncmp("Content-Type", line_buff, 12) == 0) {
@@ -381,12 +389,14 @@ int cgi_parse(HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
     }
     response->body_length = body_length;
     send_response(conn, response);
+
     return  0;
 }
 
-int cgi_process(const char* cmd, Request *req, SOCKET conn) {
+int cgi_process(Response* response, const char* cmd, Request *req, SOCKET conn) {
     HANDLE hReadPipe, hWritePipe, hProcess;
     SECURITY_ATTRIBUTES sa;
+    char *lpEnv = (char*)malloc(sizeof(char)*ENV_LENGTH);
 
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.lpSecurityDescriptor = NULL; //使用系统默认的安全描述符
@@ -408,7 +418,7 @@ int cgi_process(const char* cmd, Request *req, SOCKET conn) {
         return -1;
     }
     int ret;
-    if ((ret = cgi_parse(pi.hProcess, hReadPipe, conn)) != 0) {
+    if ((ret = cgi_parse(response, pi.hProcess, hReadPipe, conn)) != 0) {
         Logln("Cgi error %d", ret);
         http_response_code(500, conn);
     }
@@ -416,10 +426,11 @@ int cgi_process(const char* cmd, Request *req, SOCKET conn) {
     CloseHandle(hProcess);
     CloseHandle(hReadPipe);
     CloseHandle(hWritePipe);
+    free(lpEnv);
     return 0;
 }
 
-int dispatch(Request *req, SOCKET conn) {
+int dispatch(Request *req, Response* res, SOCKET conn) {
     char path[PATH_LENGTH];
     strcpy(path, www_root);
     strcat(path, req->path);
@@ -427,13 +438,13 @@ int dispatch(Request *req, SOCKET conn) {
         strcat(path, INDEX_PAGE);
     }
     // reset response
-    reset_response(response);
+    reset_response(res);
     // @todo config route
 
     if (0 == _access(path, 0)) {
         if (strlen(req->path) > cgi_ext_len && 0 == strcmp((path + strlen(path) - cgi_ext_len), cgi_ext) ) {
             build_cgi_req(req, path);
-            return cgi_process(path, req, conn);
+            return cgi_process(res, path, req, conn);
         }
         // static file
         return static_file(path, conn);
@@ -442,7 +453,7 @@ int dispatch(Request *req, SOCKET conn) {
     strcat(path, cgi_ext);
     if (0 == _access(path, 0)) {
         build_cgi_req(req, path);
-        return cgi_process(path, req, conn);
+        return cgi_process(res, path, req, conn);
     }
     
     http_response_code(404, conn);
@@ -465,8 +476,8 @@ void main_loop() {
     server_sockaddr.sin_port = htons(bind_port);
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    int reuse0 = 1;
-    if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse0, sizeof(reuse0))==-1) {
+    int reuse = 1;
+    if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse))==-1) {
         SOCPERROR
         exit(errno);
     } 
@@ -492,7 +503,7 @@ void main_loop() {
     //client
     char buffer[BUFFER_SIZE];
     Request *req = (Request*)malloc(sizeof(Request));
-    response = (Response*)malloc(sizeof(Response));
+    Response *res = (Response*)malloc(sizeof(Response));
     DWORD address_len = 60;
     char address[60];
 
@@ -551,14 +562,14 @@ void main_loop() {
             req->remote_port = atoi(sep+1);
         }
 
-        if (dispatch(req, conn) == 0) {
+        if (dispatch(req, res, conn) == 0) {
             continue;
         }
         http_response_code(500, conn);
     }
     closesocket(sock_fd);
     free(req);
-    free(response);
+    free(res);
 }
 
 int main(int argc, char* argv[]) {
