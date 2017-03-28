@@ -19,6 +19,7 @@
 
 #define DEFAULT_PORT 9527
 #define SOCKET_BACKLOG 24
+#define MAX_CLIENT 255
 #define BUFFER_SIZE 8192
 #define RESPONSE_LENGTH 655360
 
@@ -41,6 +42,7 @@
 #define SOCPERROR Logln("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
 
 typedef struct _Request {
+    char buff[BUFFER_SIZE];
     char method[7];
     char path[PATH_LENGTH];
     char query_string[QUERY_STR_LEN];
@@ -61,10 +63,12 @@ typedef struct _Response {
 } Response;
 
 typedef struct _Client {
-    Response response;
-    Request request;
+    Response *response;
+    Request *request;
     SOCKET conn;
 } Client;
+int top_client = 0;
+Client* clients[MAX_CLIENT];
 
 #define HTTP_CODE_NUM 18
 char HTTP_CODE[HTTP_CODE_NUM][50] = {
@@ -500,6 +504,10 @@ void main_loop() {
     }
 
     Logln("Server start...");
+    fd_set fdread;
+    timeval tv;
+    int n_size;
+
     //client
     char buffer[BUFFER_SIZE];
     Request *req = (Request*)malloc(sizeof(Request));
@@ -508,6 +516,17 @@ void main_loop() {
     char address[60];
 
     while(1) {
+        FD_ZERO(&fdread);
+        FD_SET(sock_fd, &fdread);
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+
+        select(0, &fdread, NULL, NULL, &tv);
+        n_size = sizeof(server_sockaddr);
+        if (FD_ISSET(sokc_fd, &fdread)) {
+            
+        }
+
         struct sockaddr_in client_addr;
         int length = sizeof(client_addr);
 
@@ -518,7 +537,7 @@ void main_loop() {
             SOCPERROR
             continue;
         }
-
+        
         size_t len;
 
         *buffer = 0;
