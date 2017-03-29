@@ -44,6 +44,9 @@ Usage:
 -t cgi timeout default is 3 seconds
 -e extname     default is cgi
 -v verbose
+
+# 测试hello.bat作为cgi脚本 打开 http://127.0.0.1:9527/hello.bat
+server.exe -e bat 
 ```  
 
 ### License : WTFPL 

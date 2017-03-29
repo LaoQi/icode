@@ -9,7 +9,7 @@
  **********************************************************************************/
 
 #define __NAME__ "Tccgi"
-#define __VERSION__ "0.1.1"
+#define __VERSION__ "0.2.1"
 
 #include <windows.h>
 #include <stdio.h>
@@ -192,19 +192,6 @@ void build_cgi_env(char* env, Request* req) {
     sprintf(env, "%c%c", 0, 0);
 }
 
-void reset_response(Response* res) {
-    res->code = res->header_num = res->body_length = 0;
-}
-
-void reset_request(Request* req) {
-    memset(req->method, 0, 7);
-    memset(req->path, 0, PATH_LENGTH);
-    memset(req->query_string, 0, QUERY_STR_LEN);
-    memset(req->params, 0, PATH_LENGTH + QUERY_STR_LEN);
-    memset(req->remote_addr, 0, 60);
-    memset(req->script_name, 0, PATH_LENGTH);
-}
-
 int add_header(Response* res, const char* name, const char* value) {
     if (res->header_num < MAX_HEADER) {
         int i = res->header_num * 2;
@@ -227,8 +214,8 @@ int send_response(SOCKET conn, Response* res) {
     }
     // add length server
     sprintf(header_buff, 
-        "Content-Length: %d\r\nServer: %s\r\nConnection: Close\r\n\r\n", 
-        res->body_length, __NAME__);
+        "Content-Length: %d\r\nServer: %s %s\r\nConnection: Close\r\n\r\n", 
+        res->body_length, __NAME__, __VERSION__);
         // "Server: %s\r\nConnection: Close\r\n\r\n", __NAME__);
     strcat(resbuff, header_buff);
     send(conn, resbuff, strlen(resbuff), 0);
@@ -240,23 +227,23 @@ int send_response(SOCKET conn, Response* res) {
     return 0;
 }
 
-void http_response_code(int code, SOCKET conn) {
-    char res[255], info[50];
+void http_response_code(int code, const Client* client) {
+    Response* res = (Response*)&client->response;
+    res->code = 500;
+    strcpy(res->phrase, "Internal Server Error");
     int i = 0;
     do{
         if (atoi(HTTP_CODE[i]) == code) {
-            sprintf(info, "%s %s", HTTP_CODE[i], HTTP_CODE[i+1]);
+            res->code = code;
+            strcpy(res->phrase, HTTP_CODE[i+1]);
             break;
         }
         i += 2;
-        if (i > HTTP_CODE_NUM) {
-            sprintf(info, "%s %s", "500", "Internal Server Error");
-        }
     } while(i < HTTP_CODE_NUM);
-
-    sprintf(res, "HTTP/1.1 %s\r\nContent-Type: text/html\r\nServer: %s\r\nConnection: Close\r\n\r\n<!DOCTYPE html>\n<center><h1>%s</h1><hr>Powered By Tccgi</center>", info, __NAME__, info);
-    send(conn, res, strlen(res), 0);
-    closesocket(conn);
+    add_header(res, "Content-Type", "text/html");
+    sprintf(res->body, "<!DOCTYPE html>\n<center><h1>%d %s</h1><hr>Powered By Tccgi</center>", res->code, res->phrase);
+    res->body_length = strlen(res->body);
+    send_response(client->conn, res);
 }
 
 char* mime_type(char *type, const char* path) {
@@ -306,7 +293,8 @@ int static_file(const char *path, SOCKET conn) {
     return 0;
 }
 
-int cgi_parse(Response* response, HANDLE hProcess, HANDLE hReadPipe, SOCKET conn) {
+int cgi_parse(const Client* client, HANDLE hProcess, HANDLE hReadPipe) {
+    Response* response = (Response*)&client->response;
     int dwRet;
     DWORD bytesInPipe, bytesRead;
     char cgi_buff[MAX_BODY];
@@ -318,7 +306,7 @@ int cgi_parse(Response* response, HANDLE hProcess, HANDLE hReadPipe, SOCKET conn
         Logln("Process timeout");
         // test kill 通过杀死子进程释放socket
         TerminateProcess(hProcess, 0);
-        http_response_code(408, conn);
+        http_response_code(408, client);
         return 0;
     }
     if (dwRet == WAIT_FAILED) {
@@ -393,7 +381,7 @@ int cgi_parse(Response* response, HANDLE hProcess, HANDLE hReadPipe, SOCKET conn
         strncpy(response->body, cdr, body_length);
     }
     response->body_length = body_length;
-    send_response(conn, response);
+    send_response(client->conn, response);
 
     return  0;
 }
@@ -423,9 +411,9 @@ int cgi_process(const Client* client, const char* cmd) {
         return -1;
     }
     int ret;
-    if ((ret = cgi_parse((Response*)&client->response, pi.hProcess, hReadPipe, client->conn)) != 0) {
+    if ((ret = cgi_parse(client, pi.hProcess, hReadPipe)) != 0) {
         Logln("Cgi error %d", ret);
-        http_response_code(500, client->conn);
+        http_response_code(500, client);
     }
     
     CloseHandle(hProcess);
@@ -444,7 +432,7 @@ int dispatch(Client* client) {
 
     if (len < 0) {
         Logln("%s recv error", client->address);
-        http_response_code(400, client->conn);
+        http_response_code(400, client);
         return 0;
     }
     
@@ -453,12 +441,11 @@ int dispatch(Client* client) {
     }
     
     Request* req = &client->request;
-    Response* res = &client->response;
 
     if (parse_head(buffer, len, req) != 0) {
         Logln("Bad request from %s", client->address);
         Logln("Recv : %s", buffer);
-        http_response_code(400, client->conn);
+        http_response_code(400, client);
         return 0;
     }
 
@@ -468,7 +455,7 @@ int dispatch(Client* client) {
     
     // just support get
     if (0 != stricmp(req->method, "GET")) {
-        http_response_code(405, client->conn);
+        http_response_code(405, client);
         return 0;
     }
 
@@ -501,7 +488,7 @@ int dispatch(Client* client) {
         }
     }
     
-    http_response_code(404, client->conn);
+    http_response_code(404, client);
     return 0;
 }
 
@@ -568,7 +555,7 @@ void main_loop() {
         }
         WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
         if (dispatch(client) != 0) {
-            http_response_code(500, client->conn);
+            http_response_code(500, client);
         }
         free(client);
         // if (FD_ISSET(sokc_fd, &fdread)) {
@@ -608,7 +595,7 @@ int main(int argc, char* argv[]) {
                 cgi_timeout = atoi(argv[argc - 1]);
             } else if (0 == strcmp(argv[argc - 2], "-e") && strlen(argv[argc - 1]) < 10) {
                 sprintf(cgi_ext,".%s", argv[argc - 1]);
-                cgi_ext_len = strlen(argv[argc - 1]);
+                cgi_ext_len = strlen(cgi_ext);
             } else if (0 == strcmp(argv[argc - 2], "-d") && strlen(argv[argc - 1]) < MAX_PATH) {
                 strcpy(www_root, argv[argc - 1]);
             }
