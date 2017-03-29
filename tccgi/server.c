@@ -63,9 +63,10 @@ typedef struct _Response {
 } Response;
 
 typedef struct _Client {
-    Response *response;
-    Request *request;
+    Response response;
+    Request request;
     SOCKET conn;
+    char address[60];
 } Client;
 int top_client = 0;
 Client* clients[MAX_CLIENT];
@@ -397,7 +398,7 @@ int cgi_parse(Response* response, HANDLE hProcess, HANDLE hReadPipe, SOCKET conn
     return  0;
 }
 
-int cgi_process(Response* response, const char* cmd, Request *req, SOCKET conn) {
+int cgi_process(const Client* client, const char* cmd) {
     HANDLE hReadPipe, hWritePipe, hProcess;
     SECURITY_ATTRIBUTES sa;
     char *lpEnv = (char*)malloc(sizeof(char)*ENV_LENGTH);
@@ -415,16 +416,16 @@ int cgi_process(Response* response, const char* cmd, Request *req, SOCKET conn) 
     si.hStdOutput = hWritePipe; //设定其标准输出为hWritePipe
     si.wShowWindow = SW_HIDE;
     si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-    Logln(req->params);
-    build_cgi_env(lpEnv, req);
-    if (0 == CreateProcess(cmd, req->params, NULL, NULL, TRUE, 0, lpEnv, NULL, &si, &pi)) {
+    Logln(client->request.params);
+    build_cgi_env(lpEnv, (Request*)&client->request);
+    if (0 == CreateProcess(cmd, client->request.params, NULL, NULL, TRUE, 0, lpEnv, NULL, &si, &pi)) {
         Logln("Error create %d", GetLastError());
         return -1;
     }
     int ret;
-    if ((ret = cgi_parse(response, pi.hProcess, hReadPipe, conn)) != 0) {
+    if ((ret = cgi_parse((Response*)&client->response, pi.hProcess, hReadPipe, client->conn)) != 0) {
         Logln("Cgi error %d", ret);
-        http_response_code(500, conn);
+        http_response_code(500, client->conn);
     }
     
     CloseHandle(hProcess);
@@ -434,33 +435,73 @@ int cgi_process(Response* response, const char* cmd, Request *req, SOCKET conn) 
     return 0;
 }
 
-int dispatch(Request *req, Response* res, SOCKET conn) {
+int dispatch(Client* client) {
+
+    size_t len;
+
+    char buffer[BUFFER_SIZE];
+    len = recv(client->conn, buffer, sizeof(buffer),0);
+
+    if (len < 0) {
+        Logln("%s recv error", client->address);
+        http_response_code(400, client->conn);
+        return 0;
+    }
+    
+    if (verbose) {
+        Logln("\r\n%s", buffer);
+    }
+    
+    Request* req = &client->request;
+    Response* res = &client->response;
+
+    if (parse_head(buffer, len, req) != 0) {
+        Logln("Bad request from %s", client->address);
+        Logln("Recv : %s", buffer);
+        http_response_code(400, client->conn);
+        return 0;
+    }
+
+    if (!verbose) {
+        Logln("%s: %s %s", req->method, client->address, req->path);
+    }
+    
+    // just support get
+    if (0 != stricmp(req->method, "GET")) {
+        http_response_code(405, client->conn);
+        return 0;
+    }
+
+    char* sep = strchr(client->address, ':');
+    if (sep != NULL) {
+        *sep = 0;
+        strcpy(req->remote_addr, client->address);
+        req->remote_port = atoi(sep+1);
+    }
+
+
     char path[PATH_LENGTH];
+    char cgi_path[PATH_LENGTH];
     strcpy(path, www_root);
     strcat(path, req->path);
     if (0 == strcmp(req->path, "/")) {
         strcat(path, INDEX_PAGE);
     }
-    // reset response
-    reset_response(res);
-    // @todo config route
 
-    if (0 == _access(path, 0)) {
-        if (strlen(req->path) > cgi_ext_len && 0 == strcmp((path + strlen(path) - cgi_ext_len), cgi_ext) ) {
+    if (0 == _access(path, 0) && 0 != strcmp((path + strlen(path) - cgi_ext_len), cgi_ext)) {
+        return static_file(path, client->conn);
+    } else {
+        sprintf(cgi_path, "%s%s", path, cgi_ext);
+        if (0 == _access(path, 0)) {
             build_cgi_req(req, path);
-            return cgi_process(res, path, req, conn);
+            return cgi_process(client, path);
+        } else if (0 == _access(cgi_path, 0)) {
+            build_cgi_req(req, cgi_path);
+            return cgi_process(client, cgi_path);
         }
-        // static file
-        return static_file(path, conn);
-    }
-    // cgi
-    strcat(path, cgi_ext);
-    if (0 == _access(path, 0)) {
-        build_cgi_req(req, path);
-        return cgi_process(res, path, req, conn);
     }
     
-    http_response_code(404, conn);
+    http_response_code(404, client->conn);
     return 0;
 }
 
@@ -504,91 +545,46 @@ void main_loop() {
     }
 
     Logln("Server start...");
-    fd_set fdread;
-    timeval tv;
-    int n_size;
+    // fd_set fdread;
+    // timeval tv;
+    // int n_size;
 
-    //client
-    char buffer[BUFFER_SIZE];
-    Request *req = (Request*)malloc(sizeof(Request));
-    Response *res = (Response*)malloc(sizeof(Response));
-    DWORD address_len = 60;
-    char address[60];
+    // FD_ZERO(&fdread);
+    // FD_SET(sock_fd, &fdread);
 
     while(1) {
-        FD_ZERO(&fdread);
-        FD_SET(sock_fd, &fdread);
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
+        // tv.tv_sec = 1;
+        // tv.tv_usec = 0;
+        DWORD address_len = 60;
 
-        select(0, &fdread, NULL, NULL, &tv);
-        n_size = sizeof(server_sockaddr);
-        if (FD_ISSET(sokc_fd, &fdread)) {
-            
-        }
-
+        Client *client = (Client*)malloc(sizeof(Client));
+        // select(0, &fdread, NULL, NULL, &tv);
         struct sockaddr_in client_addr;
         int length = sizeof(client_addr);
-
-        reset_request(req);
-
-        SOCKET conn = accept(sock_fd, (SOCKADDR *)&client_addr, &length);
-        if(conn<0) {
-            SOCPERROR
+        client->conn = accept(sock_fd, (SOCKADDR *)&client_addr, &length);
+        if (client->conn < 0) {
+            SOCPERROR;
             continue;
         }
+        WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
+        if (dispatch(client) != 0) {
+            http_response_code(500, client->conn);
+        }
+        free(client);
+        // if (FD_ISSET(sokc_fd, &fdread)) {
+            
+        //     WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, &client->address, &address_len);
+
+        //     SOCKET conn = accept(sock_fd, (SOCKADDR *)&client_addr, &length);
+        //     if(conn<0) {
+        //         SOCPERROR
+        //         continue;
+        //     }
+        // }
+
         
-        size_t len;
-
-        *buffer = 0;
-        len = recv(conn, buffer, sizeof(buffer),0);
-        memset(address, 0, 60);
-        WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, address, &address_len);
-
-        if (len < 0) {
-            Logln("%s recv error", address);
-            http_response_code(400, conn);
-            continue;
-        }
-        
-        if (verbose) {
-            Logln("\r\n%s", buffer);
-        }
-        
-
-        if (parse_head(buffer, len, req) != 0) {
-            Logln("Bad request from %s", address);
-            Logln("Recv : %s", buffer);
-            http_response_code(400, conn);
-            continue;
-        }
-
-        if (!verbose) {
-            Logln("%s: %s %s", req->method, address, req->path);
-        }
-        
-
-        // just support get
-        if (0 != stricmp(req->method, "GET")) {
-            http_response_code(405, conn);
-            continue;
-        }
-
-        char* sep = strchr(address, ':');
-        if (sep != NULL) {
-            *sep = 0;
-            strcpy(req->remote_addr, address);
-            req->remote_port = atoi(sep+1);
-        }
-
-        if (dispatch(req, res, conn) == 0) {
-            continue;
-        }
-        http_response_code(500, conn);
     }
     closesocket(sock_fd);
-    free(req);
-    free(res);
 }
 
 int main(int argc, char* argv[]) {
