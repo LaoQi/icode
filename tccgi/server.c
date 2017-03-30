@@ -68,8 +68,6 @@ typedef struct _Client {
     SOCKET conn;
     char address[60];
 } Client;
-int top_client = 0;
-Client* clients[MAX_CLIENT];
 
 #define HTTP_CODE_NUM 18
 char HTTP_CODE[HTTP_CODE_NUM][50] = {
@@ -103,6 +101,22 @@ BOOL verbose = FALSE;
 
 char www_root[2048];
 size_t cgi_ext_len;
+
+Client* clients[MAX_CLIENT];
+int top_client = 0;
+
+Client* get_client(SOCKET fd) {
+    int cur = 0;
+    Client* c = NULL;
+    while(cur < top_client) {
+        if (fd == clients[cur]->conn) {
+            c = clients[cur];
+            break;
+        }
+        cur++;
+    }
+    return c;
+}
 
 char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
     size_t i = 0;
