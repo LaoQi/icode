@@ -9,7 +9,7 @@
  **********************************************************************************/
 
 #define __NAME__ "Tccgi"
-#define __VERSION__ "0.2.1"
+#define __VERSION__ "0.2.2"
 
 #include <windows.h>
 #include <stdio.h>
@@ -21,7 +21,6 @@
 #define SOCKET_BACKLOG 24
 #define MAX_CLIENT 255
 #define BUFFER_SIZE 8192
-#define RESPONSE_LENGTH 655360
 
 #define PATH_LENGTH 1024
 #define QUERY_STR_LEN 1024
@@ -59,7 +58,7 @@ typedef struct _Response {
     int body_length;
     char phrase[25];
     char header[MAX_HEADER*2][PARAM_LENGTH];
-    char body[MAX_BODY];
+    char* body;
 } Response;
 
 typedef struct _Client {
@@ -105,6 +104,20 @@ size_t cgi_ext_len;
 Client* clients[MAX_CLIENT];
 int top_client = 0;
 
+Client* create_client() {
+    Client *client = (Client*)malloc(sizeof(Client));
+    memset(client, 0, sizeof(Client));
+    client->response.body = (char*)malloc(sizeof(char)*MAX_BODY);
+    return client;
+}
+
+void free_client(Client* client) {
+    if (client->response.body) {
+        free(client->response.body);
+    }
+    free(client);
+}
+
 Client* get_client(SOCKET fd) {
     int cur = 0;
     Client* c = NULL;
@@ -116,6 +129,34 @@ Client* get_client(SOCKET fd) {
         cur++;
     }
     return c;
+}
+
+int add_client(Client* c) {
+    if (top_client + 1 >= MAX_CLIENT) {
+        Logln("Too many clients");
+        return 0;
+    }
+    clients[top_client] = c;
+    top_client++;
+    return top_client;
+}
+
+void rm_client(Client* client) {
+    int cur = 0;
+    int top = top_client;
+    Client* temp = client;
+    while(cur < top) {
+        if (temp == clients[cur]) {
+            if (top == top_client) {
+                top -= 1;
+            }
+            clients[cur] = clients[cur + 1];
+            temp = clients[cur + 1];
+        }
+        cur++;
+    }
+    free(client);
+    top_client = top;
 }
 
 char* strsep_s(char *buff, char* cdr, char delim, size_t len) {
@@ -218,26 +259,24 @@ int add_header(Response* res, const char* name, const char* value) {
 }
 
 int send_response(SOCKET conn, Response* res) {
-    char *resbuff = (char*)malloc(sizeof(char)*RESPONSE_LENGTH);
-    char header_buff[1024];
-    sprintf(resbuff, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
+    char header_buff[HEADER_LENGTH];
+    char headers[HEADER_LENGTH*MAX_HEADER];
+    sprintf(headers, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
     memset(header_buff, '\0', HEADER_LENGTH);
     for(int i = 0; i < res->header_num; i++) {
         sprintf(header_buff, "%s: %s\r\n", res->header[i*2], res->header[i*2+1]);
-        strcat(resbuff, header_buff);
+        strcat(headers, header_buff);
     }
-    // add length server
+    // add server name
     sprintf(header_buff, 
         "Content-Length: %d\r\nServer: %s %s\r\nConnection: Close\r\n\r\n", 
         res->body_length, __NAME__, __VERSION__);
-        // "Server: %s\r\nConnection: Close\r\n\r\n", __NAME__);
-    strcat(resbuff, header_buff);
-    send(conn, resbuff, strlen(resbuff), 0);
+    strcat(headers, header_buff);
+    send(conn, headers, strlen(headers), 0);
     if (res->body_length > 0) {
         send(conn, res->body, res->body_length, 0);
     } 
     closesocket(conn);
-    free(resbuff);
     return 0;
 }
 
@@ -277,33 +316,31 @@ char* mime_type(char *type, const char* path) {
     return type;
 }
 
-int static_file(const char *path, SOCKET conn) {
+int static_file(const char *path, const Client* client) {
+    Response* res = (Response*)&client->response;
     FILE * fp;
     errno_t err;
-    if ((err = fopen_s(&fp, path, "r")) != 0) {
+    if ((err = fopen_s(&fp, path, "rb")) != 0) {
         Logln("error!");
         return 1;
     }
     fseek(fp, 0, SEEK_END);
     int length = ftell(fp);
-    if (length >= RESPONSE_LENGTH) {
+    if (length >= MAX_BODY) {
         fclose(fp);
         Logln("File too large!");
         return 2;
     }
     rewind(fp);
-    char *resbuff = (char*)malloc(sizeof(char)*RESPONSE_LENGTH);
-    length = fread(resbuff, 1, length, fp);  
-    resbuff[length] = '\0';
+    fread(res->body, 1, length, fp);
     fclose(fp);
-    char head[160];
+    res->code = 200;
+    strcpy(res->phrase, "OK");
+    res->body_length = length;
     char type[50];
     mime_type(type, path);
-    sprintf(head, "HTTP/1.1 200 Ok\r\nContent-Type: %s\r\nContent-Length: %d\r\nServer: Tccgi\r\nConnection: Close\r\n\r\n", type, length);
-    send(conn, head, strlen(head), 0);
-    send(conn, resbuff, length, 0);
-    closesocket(conn);
-    free(resbuff);
+    add_header(res, "Content-Type", type);
+    send_response(client->conn, res);
     return 0;
 }
 
@@ -311,7 +348,7 @@ int cgi_parse(const Client* client, HANDLE hProcess, HANDLE hReadPipe) {
     Response* response = (Response*)&client->response;
     int dwRet;
     DWORD bytesInPipe, bytesRead;
-    char cgi_buff[MAX_BODY];
+    char* cgi_buff = (char*)malloc(sizeof(char)*MAX_BODY);
     char header_buff[1024];
     char line_buff[1024];
     
@@ -394,9 +431,9 @@ int cgi_parse(const Client* client, HANDLE hProcess, HANDLE hReadPipe) {
         body_length = strlen(cdr);
         strncpy(response->body, cdr, body_length);
     }
+    free(cgi_buff);
     response->body_length = body_length;
     send_response(client->conn, response);
-
     return  0;
 }
 
@@ -490,7 +527,7 @@ int dispatch(Client* client) {
     }
 
     if (0 == _access(path, 0) && 0 != strcmp((path + strlen(path) - cgi_ext_len), cgi_ext)) {
-        return static_file(path, client->conn);
+        return static_file(path, client);
     } else {
         sprintf(cgi_path, "%s%s", path, cgi_ext);
         if (0 == _access(path, 0)) {
@@ -510,7 +547,7 @@ void main_loop() {
 
     WSADATA Ws;
     if ( WSAStartup(MAKEWORD(2,2), &Ws) != 0 ) { 
-        SOCPERROR
+        SOCPERROR;
         exit(4); 
     };
     //sockfd
@@ -524,33 +561,42 @@ void main_loop() {
 
     int reuse = 1;
     if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse))==-1) {
-        SOCPERROR
+        SOCPERROR;
         exit(errno);
     } 
 
     ///bind，，success return 0，error return -1
     if(bind(sock_fd,(struct sockaddr *)&server_sockaddr,sizeof(server_sockaddr)) == -1) {
-        SOCPERROR
+        SOCPERROR;
         exit(1);
     }
 
     //listen，success return 0，error return -1
     if(listen(sock_fd, SOCKET_BACKLOG) == -1) {
-        SOCPERROR
+        SOCPERROR;
         exit(2);
     }
 
     if (sock_fd < 0) {
-        SOCPERROR
+        SOCPERROR;
         exit(3);
     }
 
+    // set nonblock
+    // ULONG NonBlock = 1;   
+    // if(ioctlsocket(ListenSocket, FIONBIO, &NonBlock) == SOCKET_ERROR) {
+    //     SOCPERROR;
+    //     exit(4);
+    // }
+
     Logln("Server start...");
     // fd_set fdread;
+    // fd_set fdwrite;
     // timeval tv;
-    // int n_size;
+    // int total;
 
     // FD_ZERO(&fdread);
+    // FD_ZERO(&fdwrite);
     // FD_SET(sock_fd, &fdread);
 
     while(1) {
@@ -558,7 +604,7 @@ void main_loop() {
         // tv.tv_usec = 0;
         DWORD address_len = 60;
 
-        Client *client = (Client*)malloc(sizeof(Client));
+        Client* client = create_client();
         // select(0, &fdread, NULL, NULL, &tv);
         struct sockaddr_in client_addr;
         int length = sizeof(client_addr);
@@ -571,7 +617,6 @@ void main_loop() {
         if (dispatch(client) != 0) {
             http_response_code(500, client);
         }
-        free(client);
         // if (FD_ISSET(sokc_fd, &fdread)) {
             
         //     WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, &client->address, &address_len);
@@ -582,8 +627,7 @@ void main_loop() {
         //         continue;
         //     }
         // }
-
-        
+        free_client(client);
     }
     closesocket(sock_fd);
 }
