@@ -9,7 +9,7 @@
  **********************************************************************************/
 
 #define __NAME__ "Tccgi"
-#define __VERSION__ "0.2.2"
+#define __VERSION__ "0.2.3"
 
 #include <windows.h>
 #include <stdio.h>
@@ -19,7 +19,7 @@
 
 #define DEFAULT_PORT 9527
 #define SOCKET_BACKLOG 24
-#define SOCKET_KEEP_TIME 5
+#define SOCKET_KEEP_TIME 30
 #define MAX_CLIENT 256
 #define BUFFER_SIZE 8192
 
@@ -117,7 +117,7 @@ void reset_client(Client* client) {
     // client->fd = fd;
     // memset(&client->response, 0, sizeof(Response));
     // memset(&client->request, 0, sizeof(Request));
-    client->flag = WAIT;
+    client->flag = READ;
     memset(client->response.body, 0, sizeof(char)*MAX_BODY);
     client->response.body_length = 0;
 }
@@ -127,7 +127,7 @@ Client* create_client() {
     memset(client, 0, sizeof(Client));
     client->response.body = (char*)malloc(sizeof(char)*MAX_BODY);
     client->active = time(NULL);
-    client->flag = WAIT;
+    client->flag = READ;
     return client;
 }
 
@@ -176,7 +176,6 @@ void rm_client(Client* client) {
         }
         cur++;
     }
-    free(client);
     top_client = top;
 }
 
@@ -348,15 +347,17 @@ int static_file(const char *path, Client* const client) {
     FILE * fp;
     errno_t err;
     if ((err = fopen_s(&fp, path, "rb")) != 0) {
-        Logln("error!");
-        return 1;
+        Logln("file %s error!", path);
+        http_response_code(500, client);
+        return 0;
     }
     fseek(fp, 0, SEEK_END);
     int length = ftell(fp);
     if (length >= MAX_BODY) {
         fclose(fp);
         Logln("File too large!");
-        return 2;
+        http_response_code(500, client);
+        return 0;
     }
     rewind(fp);
     fread(res->body, 1, length, fp);
@@ -486,7 +487,8 @@ int cgi_process(Client* const client, const char* cmd) {
     build_cgi_env(lpEnv, (Request*)&client->request);
     if (0 == CreateProcess(cmd, client->request.params, NULL, NULL, TRUE, 0, lpEnv, NULL, &si, &pi)) {
         Logln("Error create %d", GetLastError());
-        return -1;
+        http_response_code(500, client);
+        return 0;
     }
     int ret;
     if ((ret = cgi_parse(client, pi.hProcess, hReadPipe)) != 0) {
@@ -508,10 +510,9 @@ int dispatch(Client* const client) {
     char buffer[BUFFER_SIZE];
     len = recv(client->fd, buffer, sizeof(buffer),0);
 
+    // close socket
     if (len == 0) {
-        Logln("%s closed", client->address);
-        client->flag = CLOSED;
-        return 0;
+        return -1;
     }
 
     if (len < 0) {
@@ -576,12 +577,11 @@ int dispatch(Client* const client) {
     return 0;
 }
 
-void main_loop() {
-
+SOCKET init_socket() {
     WSADATA Ws;
     if ( WSAStartup(MAKEWORD(2,2), &Ws) != 0 ) { 
         SOCPERROR;
-        exit(4); 
+        return -4;
     };
     //sockfd
     SOCKET server_fd = socket(AF_INET,SOCK_STREAM, IPPROTO_TCP);
@@ -593,26 +593,33 @@ void main_loop() {
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     int reuse = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse))==-1) {
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse)) == SOCKET_ERROR) {
         SOCPERROR;
-        exit(errno);
+        return -1;
     } 
+    
+    int nNetTimeout = 1000;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&nNetTimeout, sizeof(nNetTimeout)) == SOCKET_ERROR ||
+        setsockopt(server_fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&nNetTimeout, sizeof(nNetTimeout)) == SOCKET_ERROR) {
+        SOCPERROR;
+        return -1;
+    }
 
     ///bind，，success return 0，error return -1
-    if(bind(server_fd,(struct sockaddr *)&server_sockaddr,sizeof(server_sockaddr)) == -1) {
+    if(bind(server_fd,(struct sockaddr *)&server_sockaddr,sizeof(server_sockaddr)) == SOCKET_ERROR) {
         SOCPERROR;
-        exit(1);
+        return -2;
     }
 
     //listen，success return 0，error return -1
-    if(listen(server_fd, SOCKET_BACKLOG) == -1) {
+    if(listen(server_fd, SOCKET_BACKLOG) == SOCKET_ERROR) {
         SOCPERROR;
-        exit(2);
+        return -3;
     }
 
     if (server_fd < 0) {
         SOCPERROR;
-        exit(3);
+        return -4;
     }
 
     // set nonblock
@@ -621,23 +628,29 @@ void main_loop() {
     //     SOCPERROR;
     //     exit(4);
     // }
+}
+
+void main_loop() {
+
+    SOCKET server_fd = init_socket();
+    if (server_fd < 0) {
+        exit(10);
+    }
 
     Logln("Server start...");
     fd_set readfds;
     fd_set writefds;
     fd_set exceptfds;
     timeval tv;
-    int total;
-
+    
     FD_ZERO(&readfds);
     FD_ZERO(&writefds);
     FD_ZERO(&exceptfds);
-    FD_SET(server_fd, &readfds);
 
     int test = 0;
-    while(1) {
+    while(TRUE) {
         // Sleep(1000);
-        tv.tv_sec = 1;
+        tv.tv_sec = 3;
         tv.tv_usec = 0;
 
         FD_ZERO(&readfds);
@@ -651,11 +664,12 @@ void main_loop() {
             if (now - client->active > SOCKET_KEEP_TIME) {
                 client->flag = CLOSED;
             }
+            FD_SET(client->fd, &exceptfds);
             switch(client->flag) {
                 case WAIT:
+                case READ:
                     FD_SET(client->fd, &readfds);
                     break;
-                case READ:
                 case WRITE:
                     FD_SET(client->fd, &writefds);
                     break;
@@ -669,10 +683,11 @@ void main_loop() {
                 default:
                     break;
             }
-            Logln("add fd set %d flag %d", i, client->flag);
         }
-
-        select(0, &readfds, &writefds, &exceptfds, &tv);
+        if (select(0, &readfds, &writefds, &exceptfds, &tv) == SOCKET_ERROR) {
+            SOCPERROR;
+            exit(10);
+        }
         if (FD_ISSET(server_fd, &readfds)) {
             struct sockaddr_in client_addr;
             int length = sizeof(client_addr);
@@ -682,7 +697,6 @@ void main_loop() {
             if (client->fd > 0) {
                 WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
                 add_client(client);
-                FD_SET(client->fd, &readfds);
             } else {
                 free_client(client);
                 Logln("failed");
@@ -691,16 +705,15 @@ void main_loop() {
         }
         for (int i = 0; i < top_client; i++) {
             Client* client = clients[i];
-            if (client->flag == WAIT) {
-                if (FD_ISSET(client->fd, &readfds)) {
+            if (FD_ISSET(client->fd, &readfds)) {
+                if (client->flag == READ) {
                     client->active = now;
                     if (dispatch(client) != 0) {
-                        http_response_code(500, client);
+                        client->flag = CLOSED;
                     }
                 }
-                Logln("read %d", client->fd);
-            } else if(client->flag == WRITE) {
-                if (FD_ISSET(client->fd, &writefds)) {
+            } else if (FD_ISSET(client->fd, &writefds)) {
+                if(client->flag == WRITE) {
                     client->active = now;
                     if (send_response(client) != 0){
                         client->flag = CLOSED;
@@ -708,20 +721,11 @@ void main_loop() {
                         reset_client(client);
                     }
                 }
-                Logln("write %d", client->fd);
+            } else if (FD_ISSET(client->fd, &exceptfds)) {
+                client->flag = CLOSED;
             }
         }
-        Logln("read %d write %d except %d loop %d", readfds.fd_count, writefds.fd_count, exceptfds.fd_count, test++);
-        // if (FD_ISSET(, &fdread)) {
-            
-        //     WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, &client->address, &address_len);
-
-        //     SOCKET conn = accept(server_fd, (SOCKADDR *)&client_addr, &length);
-        //     if(conn<0) {
-        //         SOCPERROR
-        //         continue;
-        //     }
-        // }
+        Logln("read %d write %d except %d client %d loop %d", readfds.fd_count, writefds.fd_count, exceptfds.fd_count, top_client, test++);
     }
     closesocket(server_fd);
 }
