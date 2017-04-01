@@ -19,7 +19,8 @@
 
 #define DEFAULT_PORT 9527
 #define SOCKET_BACKLOG 24
-#define MAX_CLIENT 255
+#define SOCKET_KEEP_TIME 5
+#define MAX_CLIENT 256
 #define BUFFER_SIZE 8192
 
 #define PATH_LENGTH 1024
@@ -61,11 +62,18 @@ typedef struct _Response {
     char* body;
 } Response;
 
+typedef enum _StatusFlag
+{
+    WAIT, READ, WRITE, CLOSED
+} StatusFlag;
+
 typedef struct _Client {
     Response response;
     Request request;
-    SOCKET conn;
+    SOCKET fd;
+    StatusFlag flag;
     char address[60];
+    time_t active;
 } Client;
 
 #define HTTP_CODE_NUM 18
@@ -104,10 +112,22 @@ size_t cgi_ext_len;
 Client* clients[MAX_CLIENT];
 int top_client = 0;
 
+void reset_client(Client* client) {
+    // SOCKET fd = client->fd;
+    // client->fd = fd;
+    // memset(&client->response, 0, sizeof(Response));
+    // memset(&client->request, 0, sizeof(Request));
+    client->flag = WAIT;
+    memset(client->response.body, 0, sizeof(char)*MAX_BODY);
+    client->response.body_length = 0;
+}
+
 Client* create_client() {
     Client *client = (Client*)malloc(sizeof(Client));
     memset(client, 0, sizeof(Client));
     client->response.body = (char*)malloc(sizeof(char)*MAX_BODY);
+    client->active = time(NULL);
+    client->flag = WAIT;
     return client;
 }
 
@@ -122,7 +142,7 @@ Client* get_client(SOCKET fd) {
     int cur = 0;
     Client* c = NULL;
     while(cur < top_client) {
-        if (fd == clients[cur]->conn) {
+        if (fd == clients[cur]->fd) {
             c = clients[cur];
             break;
         }
@@ -134,7 +154,8 @@ Client* get_client(SOCKET fd) {
 int add_client(Client* c) {
     if (top_client + 1 >= MAX_CLIENT) {
         Logln("Too many clients");
-        return 0;
+        // return 0;
+        exit(500);
     }
     clients[top_client] = c;
     top_client++;
@@ -258,7 +279,9 @@ int add_header(Response* res, const char* name, const char* value) {
     return -1;
 }
 
-int send_response(SOCKET conn, Response* res) {
+int send_response(Client* const client) {
+    SOCKET conn = client->fd;
+    Response* res = (Response*) &client->response;
     char header_buff[HEADER_LENGTH];
     char headers[HEADER_LENGTH*MAX_HEADER];
     sprintf(headers, "HTTP/1.1 %d %s\r\n", res->code, res->phrase);
@@ -269,18 +292,22 @@ int send_response(SOCKET conn, Response* res) {
     }
     // add server name
     sprintf(header_buff, 
-        "Content-Length: %d\r\nServer: %s %s\r\nConnection: Close\r\n\r\n", 
+        "Content-Length: %d\r\nServer: %s %s\r\nConnection: keep-alive\r\n\r\n", 
         res->body_length, __NAME__, __VERSION__);
     strcat(headers, header_buff);
-    send(conn, headers, strlen(headers), 0);
+    if (send(conn, headers, strlen(headers), 0) == 0) {
+        return 1;
+    }
     if (res->body_length > 0) {
-        send(conn, res->body, res->body_length, 0);
-    } 
-    closesocket(conn);
+        if (send(conn, res->body, res->body_length, 0) == 0) {
+            return 1;
+        }
+    }
+    // closesocket(conn);
     return 0;
 }
 
-void http_response_code(int code, const Client* client) {
+void http_response_code(int code, Client* const client) {
     Response* res = (Response*)&client->response;
     res->code = 500;
     strcpy(res->phrase, "Internal Server Error");
@@ -296,7 +323,7 @@ void http_response_code(int code, const Client* client) {
     add_header(res, "Content-Type", "text/html");
     sprintf(res->body, "<!DOCTYPE html>\n<center><h1>%d %s</h1><hr>Powered By Tccgi</center>", res->code, res->phrase);
     res->body_length = strlen(res->body);
-    send_response(client->conn, res);
+    client->flag = WRITE;
 }
 
 char* mime_type(char *type, const char* path) {
@@ -316,7 +343,7 @@ char* mime_type(char *type, const char* path) {
     return type;
 }
 
-int static_file(const char *path, const Client* client) {
+int static_file(const char *path, Client* const client) {
     Response* res = (Response*)&client->response;
     FILE * fp;
     errno_t err;
@@ -340,11 +367,11 @@ int static_file(const char *path, const Client* client) {
     char type[50];
     mime_type(type, path);
     add_header(res, "Content-Type", type);
-    send_response(client->conn, res);
+    client->flag = WRITE;
     return 0;
 }
 
-int cgi_parse(const Client* client, HANDLE hProcess, HANDLE hReadPipe) {
+int cgi_parse(Client* const client, HANDLE hProcess, HANDLE hReadPipe) {
     Response* response = (Response*)&client->response;
     int dwRet;
     DWORD bytesInPipe, bytesRead;
@@ -433,11 +460,11 @@ int cgi_parse(const Client* client, HANDLE hProcess, HANDLE hReadPipe) {
     }
     free(cgi_buff);
     response->body_length = body_length;
-    send_response(client->conn, response);
+    client->flag = WRITE;
     return  0;
 }
 
-int cgi_process(const Client* client, const char* cmd) {
+int cgi_process(Client* const client, const char* cmd) {
     HANDLE hReadPipe, hWritePipe, hProcess;
     SECURITY_ATTRIBUTES sa;
     char *lpEnv = (char*)malloc(sizeof(char)*ENV_LENGTH);
@@ -474,12 +501,18 @@ int cgi_process(const Client* client, const char* cmd) {
     return 0;
 }
 
-int dispatch(Client* client) {
+int dispatch(Client* const client) {
 
     size_t len;
 
     char buffer[BUFFER_SIZE];
-    len = recv(client->conn, buffer, sizeof(buffer),0);
+    len = recv(client->fd, buffer, sizeof(buffer),0);
+
+    if (len == 0) {
+        Logln("%s closed", client->address);
+        client->flag = CLOSED;
+        return 0;
+    }
 
     if (len < 0) {
         Logln("%s recv error", client->address);
@@ -551,7 +584,7 @@ void main_loop() {
         exit(4); 
     };
     //sockfd
-    SOCKET sock_fd = socket(AF_INET,SOCK_STREAM, IPPROTO_TCP);
+    SOCKET server_fd = socket(AF_INET,SOCK_STREAM, IPPROTO_TCP);
 
     //sockaddr_in
     struct sockaddr_in server_sockaddr;
@@ -560,76 +593,137 @@ void main_loop() {
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     int reuse = 1;
-    if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse))==-1) {
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse))==-1) {
         SOCPERROR;
         exit(errno);
     } 
 
     ///bind，，success return 0，error return -1
-    if(bind(sock_fd,(struct sockaddr *)&server_sockaddr,sizeof(server_sockaddr)) == -1) {
+    if(bind(server_fd,(struct sockaddr *)&server_sockaddr,sizeof(server_sockaddr)) == -1) {
         SOCPERROR;
         exit(1);
     }
 
     //listen，success return 0，error return -1
-    if(listen(sock_fd, SOCKET_BACKLOG) == -1) {
+    if(listen(server_fd, SOCKET_BACKLOG) == -1) {
         SOCPERROR;
         exit(2);
     }
 
-    if (sock_fd < 0) {
+    if (server_fd < 0) {
         SOCPERROR;
         exit(3);
     }
 
     // set nonblock
-    // ULONG NonBlock = 1;   
-    // if(ioctlsocket(ListenSocket, FIONBIO, &NonBlock) == SOCKET_ERROR) {
+    // ULONG nonblock = 1;   
+    // if(ioctlsocket(server_fd, FIONBIO, &nonblock) == SOCKET_ERROR) {
     //     SOCPERROR;
     //     exit(4);
     // }
 
     Logln("Server start...");
-    // fd_set fdread;
-    // fd_set fdwrite;
-    // timeval tv;
-    // int total;
+    fd_set readfds;
+    fd_set writefds;
+    fd_set exceptfds;
+    timeval tv;
+    int total;
 
-    // FD_ZERO(&fdread);
-    // FD_ZERO(&fdwrite);
-    // FD_SET(sock_fd, &fdread);
+    FD_ZERO(&readfds);
+    FD_ZERO(&writefds);
+    FD_ZERO(&exceptfds);
+    FD_SET(server_fd, &readfds);
 
+    int test = 0;
     while(1) {
-        // tv.tv_sec = 1;
-        // tv.tv_usec = 0;
-        DWORD address_len = 60;
+        // Sleep(1000);
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
 
-        Client* client = create_client();
-        // select(0, &fdread, NULL, NULL, &tv);
-        struct sockaddr_in client_addr;
-        int length = sizeof(client_addr);
-        client->conn = accept(sock_fd, (SOCKADDR *)&client_addr, &length);
-        if (client->conn < 0) {
-            SOCPERROR;
-            continue;
+        FD_ZERO(&readfds);
+        FD_ZERO(&writefds);
+        FD_ZERO(&exceptfds);
+        FD_SET(server_fd, &readfds);
+
+        time_t now = time(NULL);
+        for (int i = 0; i < top_client; i++) {
+            Client* client = clients[i];
+            if (now - client->active > SOCKET_KEEP_TIME) {
+                client->flag = CLOSED;
+            }
+            switch(client->flag) {
+                case WAIT:
+                    FD_SET(client->fd, &readfds);
+                    break;
+                case READ:
+                case WRITE:
+                    FD_SET(client->fd, &writefds);
+                    break;
+                case CLOSED:
+                    Logln("%s closed", client->address);
+                    closesocket(client->fd);
+                    rm_client(client);
+                    free_client(client);
+                    i--;
+                    break;
+                default:
+                    break;
+            }
+            Logln("add fd set %d flag %d", i, client->flag);
         }
-        WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
-        if (dispatch(client) != 0) {
-            http_response_code(500, client);
+
+        select(0, &readfds, &writefds, &exceptfds, &tv);
+        if (FD_ISSET(server_fd, &readfds)) {
+            struct sockaddr_in client_addr;
+            int length = sizeof(client_addr);
+            DWORD address_len = 60;
+            Client* client = create_client();
+            client->fd = accept(server_fd, (SOCKADDR *)&client_addr, &length);
+            if (client->fd > 0) {
+                WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
+                add_client(client);
+                FD_SET(client->fd, &readfds);
+            } else {
+                free_client(client);
+                Logln("failed");
+            }
+            Logln("accept %d", client->fd);
         }
-        // if (FD_ISSET(sokc_fd, &fdread)) {
+        for (int i = 0; i < top_client; i++) {
+            Client* client = clients[i];
+            if (client->flag == WAIT) {
+                if (FD_ISSET(client->fd, &readfds)) {
+                    client->active = now;
+                    if (dispatch(client) != 0) {
+                        http_response_code(500, client);
+                    }
+                }
+                Logln("read %d", client->fd);
+            } else if(client->flag == WRITE) {
+                if (FD_ISSET(client->fd, &writefds)) {
+                    client->active = now;
+                    if (send_response(client) != 0){
+                        client->flag = CLOSED;
+                    } else {
+                        reset_client(client);
+                    }
+                }
+                Logln("write %d", client->fd);
+            }
+        }
+        Logln("read %d write %d except %d loop %d", readfds.fd_count, writefds.fd_count, exceptfds.fd_count, test++);
+        // if (FD_ISSET(, &fdread)) {
             
         //     WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, &client->address, &address_len);
 
-        //     SOCKET conn = accept(sock_fd, (SOCKADDR *)&client_addr, &length);
+        //     SOCKET conn = accept(server_fd, (SOCKADDR *)&client_addr, &length);
         //     if(conn<0) {
         //         SOCPERROR
         //         continue;
         //     }
         // }
-        free_client(client);
     }
-    closesocket(sock_fd);
+    closesocket(server_fd);
 }
 
 int main(int argc, char* argv[]) {
