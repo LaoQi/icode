@@ -2,7 +2,7 @@
  *
  *  Tccgi  
  *  Auth : MADAO
- *  License : WTFPL
+ *  License : MIT
  *  compiler by tcc link:http://bellard.org/tcc/
  *  cgi :  https://www.ietf.org/rfc/rfc3875
  *
