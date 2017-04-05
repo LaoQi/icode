@@ -1,6 +1,8 @@
 ## Tccgi
 
-简单的玩具型http服务器，支持基础的cgi请求。通过[tcc](http://bellard.org/tcc/)编译。  
+简单的玩具型http服务器，支持基础的cgi请求。可以通过[tcc](http://bellard.org/tcc/)编译。  
+
+> 已知在选择64位tcc时会导致select的句柄异常，建议使用32位编译。
 
 ### 构建：
   
@@ -49,22 +51,4 @@ Usage:
 server.exe -e bat 
 ```  
 
-### License : WTFPL 
-
-```
-            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-                   Version 2, December 2004
-
-Copyright (C) 2004 Sam Hocevar <sam@hocevar.net>
-
-Everyone is permitted to copy and distribute verbatim or modified
-copies of this license document, and changing it is allowed as long
-as the name is changed.
-
-           DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-  TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
-
- 0. You just DO WHAT THE FUCK YOU WANT TO.
-
-```
-
+### License : MIT 

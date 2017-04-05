@@ -9,13 +9,16 @@
  **********************************************************************************/
 
 #define __NAME__ "Tccgi"
-#define __VERSION__ "0.2.3"
+#define __VERSION__ "0.2.4"
     
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#ifndef _MSC_VER
 #include "winsock2.h"
+#endif
 
 #define DEFAULT_PORT 9527
 #define SOCKET_BACKLOG 24
@@ -45,13 +48,13 @@
 
 typedef struct _Request {
     char buff[BUFFER_SIZE];
-    char method[7];
     char path[PATH_LENGTH];
     char query_string[QUERY_STR_LEN];
     char params[PATH_LENGTH + QUERY_STR_LEN];
     char request_uri[PATH_LENGTH + QUERY_STR_LEN];
     char remote_addr[60];
     char script_name[PATH_LENGTH];
+    char method[8];
     int remote_port;
 } Request;
 
@@ -59,7 +62,7 @@ typedef struct _Response {
     int code;
     int header_num;
     int body_length;
-    char phrase[25];
+    char phrase[24];
     char header[MAX_HEADER*2][PARAM_LENGTH];
     char* body;
 } Response;
@@ -74,7 +77,7 @@ typedef struct _Client {
     Request request;
     SOCKET fd;
     StatusFlag flag;
-    char address[60];
+    struct sockaddr_in address;
     time_t active;
 } Client;
 
@@ -120,7 +123,11 @@ void reset_client(Client* client) {
     // memset(&client->response, 0, sizeof(Response));
     // memset(&client->request, 0, sizeof(Request));
     client->flag = READ;
+    memset((Request*)&client->request, 0, sizeof(Request));
     memset(client->response.body, 0, sizeof(char)*MAX_BODY);
+    client->response.header_num = 0;
+    client->response.code = 0;
+    client->response.body_length = 0;
     client->response.body_length = 0;
 }
 
@@ -335,7 +342,7 @@ char* mime_type(char *type, const char* path) {
     }
     ext++;
     for (int i = 0; i < MIME_TYPE_NUM; i+=2) {
-        if (0 == stricmp(MIME_TYPE[i], ext)) {
+        if (0 == _stricmp(MIME_TYPE[i], ext)) {
             strcpy(type, MIME_TYPE[i+1]);
             return type;
         }
@@ -468,7 +475,7 @@ int cgi_parse(Client* const client, HANDLE hProcess, HANDLE hReadPipe) {
 }
 
 int cgi_process(Client* const client, const char* cmd) {
-    HANDLE hReadPipe, hWritePipe, hProcess;
+    HANDLE hReadPipe, hWritePipe;
     SECURITY_ATTRIBUTES sa;
     char *lpEnv = (char*)malloc(sizeof(char)*ENV_LENGTH);
 
@@ -481,8 +488,8 @@ int cgi_process(Client* const client, const char* cmd) {
     PROCESS_INFORMATION pi; 
     si.cb = sizeof(STARTUPINFO);
     GetStartupInfo(&si); 
-    si.hStdError = hWritePipe; //设定其标准错误输出为hWritePipe
-    si.hStdOutput = hWritePipe; //设定其标准输出为hWritePipe
+    si.hStdError = hWritePipe; //set stderr hWritePipe
+    si.hStdOutput = hWritePipe; //set stdout hWritePipe
     si.wShowWindow = SW_HIDE;
     si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     Logln(client->request.params);
@@ -498,7 +505,6 @@ int cgi_process(Client* const client, const char* cmd) {
         http_response_code(500, client);
     }
     
-    CloseHandle(hProcess);
     CloseHandle(hReadPipe);
     CloseHandle(hWritePipe);
     free(lpEnv);
@@ -507,76 +513,76 @@ int cgi_process(Client* const client, const char* cmd) {
 
 int dispatch(Client* const client) {
 
-    size_t len;
+    int len;
 
-    char buffer[BUFFER_SIZE];
-    len = recv(client->fd, buffer, sizeof(buffer),0);
+    char* buffer = (char*)malloc(sizeof(char)*BUFFER_SIZE);
+    memset(buffer, 0, BUFFER_SIZE);
+    len = recv(client->fd, buffer, BUFFER_SIZE, 0);
 
-    // close socket
-    if (len == 0) {
-        return -1;
-    }
+    int rtn = 0;
+    do {
 
-    if (len < 0) {
-        Logln("%s recv error", client->address);
-        http_response_code(400, client);
-        return 0;
-    }
-    
-    if (verbose) {
-        Logln("\r\n%s", buffer);
-    }
-    
-    Request* req = &client->request;
-
-    if (parse_head(buffer, len, req) != 0) {
-        Logln("Bad request from %s", client->address);
-        Logln("Recv : %s", buffer);
-        http_response_code(400, client);
-        return 0;
-    }
-
-    if (!verbose) {
-        Logln("%s: %s %s", req->method, client->address, req->path);
-    }
-    
-    // just support get
-    if (0 != stricmp(req->method, "GET")) {
-        http_response_code(405, client);
-        return 0;
-    }
-
-    char* sep = strchr(client->address, ':');
-    if (sep != NULL) {
-        *sep = 0;
-        strcpy(req->remote_addr, client->address);
-        req->remote_port = atoi(sep+1);
-    }
-
-
-    char path[PATH_LENGTH];
-    char cgi_path[PATH_LENGTH];
-    strcpy(path, www_root);
-    strcat(path, req->path);
-    if (0 == strcmp(req->path, "/")) {
-        strcat(path, INDEX_PAGE);
-    }
-
-    if (0 == _access(path, 0) && 0 != strcmp((path + strlen(path) - cgi_ext_len), cgi_ext)) {
-        return static_file(path, client);
-    } else {
-        sprintf(cgi_path, "%s%s", path, cgi_ext);
-        if (0 == _access(path, 0)) {
-            build_cgi_req(req, path);
-            return cgi_process(client, path);
-        } else if (0 == _access(cgi_path, 0)) {
-            build_cgi_req(req, cgi_path);
-            return cgi_process(client, cgi_path);
+        // close socket
+        if (len == 0 || len == SOCKET_ERROR) {
+            SOCPERROR;
+            rtn = -1; break;
         }
-    }
-    
-    http_response_code(404, client);
-    return 0;
+
+        if (verbose) {
+            Logln("\r\n%s", buffer);
+        }
+
+        Request* req = &client->request;
+        char* address = inet_ntoa(client->address.sin_addr);
+
+        if (parse_head(buffer, len, req) != 0) {
+            Logln("Bad request from %s", address);
+            Logln("Recv : %s", buffer);
+            http_response_code(400, client);
+            break;
+        }
+
+        if (!verbose) {
+            Logln("%s: %s %s", req->method, address, req->path);
+        }
+
+        // just support get
+        if (0 != _stricmp(req->method, "GET")) {
+            http_response_code(405, client);
+            break;
+        }
+
+        strcpy(req->remote_addr, address);
+        req->remote_port = client->address.sin_port;
+
+        char path[PATH_LENGTH];
+        char cgi_path[PATH_LENGTH];
+        strcpy(path, www_root);
+        strcat(path, req->path);
+        if (0 == strcmp(req->path, "/")) {
+            strcat(path, INDEX_PAGE);
+        }
+
+        if (0 == _access(path, 0) && 0 != strcmp((path + strlen(path) - cgi_ext_len), cgi_ext)) {
+            rtn = static_file(path, client);
+            break;
+        } else {
+            sprintf(cgi_path, "%s%s", path, cgi_ext);
+            if (0 == _access(path, 0)) {
+                build_cgi_req(req, path);
+                rtn = cgi_process(client, path);
+                break;
+            } else if (0 == _access(cgi_path, 0)) {
+                build_cgi_req(req, cgi_path);
+                rtn = cgi_process(client, cgi_path);
+                break;
+            }
+        }
+
+        http_response_code(404, client);
+    } while (0);
+    free(buffer);
+    return rtn;
 }
 
 SOCKET init_socket() {
@@ -623,13 +629,6 @@ SOCKET init_socket() {
         SOCPERROR;
         return -4;
     }
-
-    // set nonblock
-    // ULONG nonblock = 1;   
-    // if(ioctlsocket(server_fd, FIONBIO, &nonblock) == SOCKET_ERROR) {
-    //     SOCPERROR;
-    //     exit(4);
-    // }
     return server_fd;
 }
 
@@ -667,7 +666,9 @@ void main_loop() {
             if (now - client->active > SOCKET_KEEP_TIME) {
                 client->flag = CLOSED;
             }
-            FD_SET(client->fd, &exceptfds);
+            if (client->flag != CLOSED) {
+                FD_SET(client->fd, &exceptfds);
+            }
             switch(client->flag) {
                 case WAIT:
                 case READ:
@@ -677,7 +678,7 @@ void main_loop() {
                     FD_SET(client->fd, &writefds);
                     break;
                 case CLOSED:
-                    Logln("%s closed", client->address);
+                    Logln("%s closed",inet_ntoa(client->address.sin_addr));
                     closesocket(client->fd);
                     rm_client(client);
                     free_client(client);
@@ -692,13 +693,11 @@ void main_loop() {
             exit(10);
         }
         if (FD_ISSET(server_fd, &readfds)) {
-            struct sockaddr_in client_addr;
-            int length = sizeof(client_addr);
             //DWORD address_len = 60;
             Client* client = create_client();
-            client->fd = accept(server_fd, (SOCKADDR *)&client_addr, &length);
+            int length = sizeof(client->address);
+            client->fd = accept(server_fd, (SOCKADDR *)&client->address, &length);
             if (client->fd > 0) {
-                strcpy(client->address, inet_ntoa(client_addr.sin_addr));
                 //WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
                 add_client(client);
             } else {
@@ -709,7 +708,9 @@ void main_loop() {
         }
         for (int i = 0; i < top_client; i++) {
             Client* client = clients[i];
-            if (FD_ISSET(client->fd, &readfds)) {
+            if (FD_ISSET(client->fd, &exceptfds)) {
+                client->flag = CLOSED;
+            } else if (FD_ISSET(client->fd, &readfds)) {
                 if (client->flag == READ) {
                     client->active = now;
                     if (dispatch(client) != 0) {
@@ -725,11 +726,9 @@ void main_loop() {
                         reset_client(client);
                     }
                 }
-            } else if (FD_ISSET(client->fd, &exceptfds)) {
-                client->flag = CLOSED;
             }
         }
-        Logln("read %d write %d except %d client %d loop %d", readfds.fd_count, writefds.fd_count, exceptfds.fd_count, top_client, test++);
+        //Logln("read %d write %d except %d client %d loop %d", readfds.fd_count, writefds.fd_count, exceptfds.fd_count, top_client, test++);
     }
     closesocket(server_fd);
 }
