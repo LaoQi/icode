@@ -10,7 +10,7 @@
 
 #define __NAME__ "Tccgi"
 #define __VERSION__ "0.2.3"
-
+    
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +38,9 @@
 
 #define PUSH_ENV(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%s", y, z);}
 #define PUSH_ENV_D(x, y, z) {x += strlen(x) + 1; sprintf(x, "%s=%d", y, z);}
-#define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); write(STDOUT_FILENO,_logbuff,strlen(_logbuff)); write(STDOUT_FILENO,"\n",1);} while(0);
+//#define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); strcat(_logbuff, "\n"); write(STDOUT_FILENO,_logbuff,strlen(_logbuff));} while(0);
+
+#define Logln(...) do{char _logbuff[1024]; sprintf(_logbuff, __VA_ARGS__); strcat(_logbuff, "\n"); fwrite(_logbuff, strlen(_logbuff), 1, stdout); fflush(stdout);} while(0);
 #define SOCPERROR Logln("Socket Error : %d\n", WSAGetLastError());//perror(errstr)
 
 typedef struct _Request {
@@ -204,7 +206,7 @@ int parse_head(const char *data, size_t len, Request *req) {
     }
     req->method[i] = '\0';
     ++i;
-    while (pi < PATH_MAX && data[i] != '?' && data[i] != ' ') {
+    while (pi < PATH_LENGTH && data[i] != '?' && data[i] != ' ') {
         req->path[pi++] = data[i++];
     }
     req->path[pi] = '\0';
@@ -219,7 +221,7 @@ int parse_head(const char *data, size_t len, Request *req) {
 }
 
 int clear_buffer(char *buffer, size_t buffsize) {
-    int i = 0, del = 0;
+    size_t i = 0, del = 0;
     while (i + del < buffsize) {
         buffer[i] = buffer[i + del];
         if (buffer[i] == 13 && i + del + 1 < buffsize && buffer[i + del + 1] == 10) {
@@ -628,6 +630,7 @@ SOCKET init_socket() {
     //     SOCPERROR;
     //     exit(4);
     // }
+    return server_fd;
 }
 
 void main_loop() {
@@ -641,7 +644,7 @@ void main_loop() {
     fd_set readfds;
     fd_set writefds;
     fd_set exceptfds;
-    timeval tv;
+    struct timeval tv;
     
     FD_ZERO(&readfds);
     FD_ZERO(&writefds);
@@ -691,11 +694,12 @@ void main_loop() {
         if (FD_ISSET(server_fd, &readfds)) {
             struct sockaddr_in client_addr;
             int length = sizeof(client_addr);
-            DWORD address_len = 60;
+            //DWORD address_len = 60;
             Client* client = create_client();
             client->fd = accept(server_fd, (SOCKADDR *)&client_addr, &length);
             if (client->fd > 0) {
-                WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
+                strcpy(client->address, inet_ntoa(client_addr.sin_addr));
+                //WSAAddressToString((LPSOCKADDR)&client_addr, sizeof(SOCKADDR), NULL, (char*)&client->address, &address_len);
                 add_client(client);
             } else {
                 free_client(client);
@@ -762,11 +766,11 @@ int main(int argc, char* argv[]) {
     }
     
     if (argc > 1) {
-        printf("Usage:
- -d root directory
- -p port\tdefault port is %d
- -t cgi timeout\tdefault is %d seconds
- -e extname\tdefault is %s
+        printf("Usage:\n\
+ -d root directory\n\
+ -p port\tdefault port is %d\n\
+ -t cgi timeout\tdefault is %d seconds\n\
+ -e extname\tdefault is %s\n\
  -v verbose\n", DEFAULT_PORT, CGI_TIMEOUT, CGI_EXTNAME);
             exit(1);
     }
