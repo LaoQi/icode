@@ -335,14 +335,13 @@ void http_response_code(int code, Client* const client) {
 }
 
 char* mime_type(char *type, const char* path) {
-    char* ext = strchr(path, '.');
-    if (ext == NULL) {
-        strcpy(type, DEFAULT_TYPE);
-        return type;
-    }
-    ext++;
+	char ext[8];
+	size_t p,e;
     for (int i = 0; i < MIME_TYPE_NUM; i+=2) {
-        if (0 == _stricmp(MIME_TYPE[i], ext)) {
+		sprintf(ext, ".%s", MIME_TYPE[i]);
+		p = strlen(path);
+		e = strlen(ext);
+		if (p > e && _stricmp(ext, (char*)(path + p - e)) == 0){
             strcpy(type, MIME_TYPE[i+1]);
             return type;
         }
