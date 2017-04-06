@@ -524,7 +524,9 @@ int dispatch(Client* const client) {
 
         // close socket
         if (len == 0 || len == SOCKET_ERROR) {
-            SOCPERROR;
+            if (len == SOCKET_ERROR) {
+                SOCPERROR;
+            }
             rtn = -1; break;
         }
 
