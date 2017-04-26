@@ -15,7 +15,8 @@ import timeit
 import markdown
 from pymdownx import extra
 
-ABSTRACT_LEN = 120
+ABSTRACT_LEN = 300
+INDEX_LIMIT = 20
 TAG_TITLE = '{{TITLE}}'
 TAG_CONTENT = '{{CONTENT}}'
 RE_TRIP = re.compile('<.*?>|\n')
@@ -35,15 +36,9 @@ class MyPostprocessor(markdown.postprocessors.Postprocessor):
         if result:
             self.title = result.group(1)
             abstract_len = len(self.title) + ABSTRACT_LEN + 9 # abstract + <h1></h1>
-            if len(text) > abstract_len:
-                self.abstract = text[len(self.title) + 9: abstract_len]
-            else:
-                self.abstract = text
+            self.abstract = RE_TRIP.sub('', text[len(self.title) + 9:])[:abstract_len]
         else:
-            if len(text) > abstract_len:
-                self.abstract = text[: abstract_len]
-            else:
-                self.abstract = text
+            self.abstract = RE_TRIP.sub('', text)[:abstract_len]
 
         content = TEMPLATE.replace(TAG_TITLE, self.title)
 
@@ -85,13 +80,20 @@ def building(source_root, target_root):
             relpath = os.path.relpath(root, source_root)
             target_file = os.path.join(target_root, relpath, filename)
 
+            if relpath == '.':
+                relpath = '/'
+            else:
+                relpath = '/' + relpath + '/'
+
             if filename.endswith(".md"):
                 title, abstract, timestamp = generate(file_path, target_file[:-3] + ".html")
-                # print(title, abstract, time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(timestamp)))
-                result.append({'title':title, 'abstract':abstract, 'mtime':timestamp})
                 if relpath not in struct:
                     struct[relpath] = []
                 struct[relpath].append({'title':title, 'path':filename[:-3], 'mtime': timestamp})
+
+                result.append({
+                    'title':title, 'abstract':abstract,
+                    'mtime':timestamp, 'path':relpath + filename[:-3] + '.html'})
                 count_convert += 1
             else:
                 shutil.copy(file_path, target_file)
@@ -99,11 +101,18 @@ def building(source_root, target_root):
 
     cost_time = timeit.default_timer() - start
 
+    # sort
+    result.sort(key=lambda x: x['mtime'])
     for key in struct:
         struct[str(key)].sort(key=lambda x: x['mtime'])
-    # for res in result:
-    #     print(res['title'], res['abstract'], time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(res['mtime'])))
-    print(json.dumps(struct))
+
+    # storage
+    for i in range(0, len(result), INDEX_LIMIT):
+        with open(os.path.join(target_root, 'index.%d.json'%(i/INDEX_LIMIT)), 'w') as output:
+            json.dump(result[i:i+INDEX_LIMIT], output)
+    with open(os.path.join(target_root, 'struct.json'), 'w') as output:
+        json.dump(struct, output)
+
     print(
         "Copy %d files, Convert %d markdown files, Use time : %ds" %
         (count_copy, count_convert, cost_time))
