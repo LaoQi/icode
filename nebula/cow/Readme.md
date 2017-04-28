@@ -4,6 +4,7 @@
 
 * markdown    
 * pymdownx 
+* pygments
 
 ### 生成代码样式 
 

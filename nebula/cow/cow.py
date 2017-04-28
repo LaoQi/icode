@@ -13,10 +13,12 @@ import json
 import timeit
 
 import markdown
+from markdown.extensions import sane_lists
 from pymdownx import extra
 
 ABSTRACT_LEN = 512
 INDEX_LIMIT = 20
+PAGE_EXT = '.markdown'
 TAG_TITLE = '{{TITLE}}'
 TAG_CONTENT = '{{CONTENT}}'
 RE_TRIP = re.compile('<.*?>|\n')
@@ -54,7 +56,8 @@ def generate(src, dst):
     input_file = codecs.open(src, mode="r", encoding="utf-8")
     text = input_file.read()
 
-    markd = markdown.Markdown(extensions=[extra.makeExtension()])
+    markd = markdown.Markdown(extensions=[
+        extra.makeExtension(), sane_lists.makeExtension()])
     processor = MyPostprocessor()
     markd.postprocessors.add('mypreprocessor', processor, '_end')
 
@@ -89,15 +92,16 @@ def building(source_root, target_root):
             else:
                 relpath = '/' + relpath + '/'
 
-            if filename.endswith(".md"):
-                title, abstract, timestamp = generate(file_path, target_file[:-3] + ".html")
+            end = -len(PAGE_EXT)
+            if filename.endswith(PAGE_EXT):
+                title, abstract, timestamp = generate(file_path, target_file[:end] + ".html")
                 if relpath not in struct:
                     struct[relpath] = []
-                struct[relpath].append({'title':title, 'path':filename[:-3], 'mtime': timestamp})
+                struct[relpath].append({'title':title, 'path':filename[:end], 'mtime': timestamp})
 
                 result.append({
                     'title':title, 'abstract':abstract,
-                    'mtime':timestamp, 'path':relpath + filename[:-3] + '.html'})
+                    'mtime':timestamp, 'path':relpath + filename[:end] + '.html'})
                 count_convert += 1
             else:
                 shutil.copy(file_path, target_file)
