@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8"/>
+        <title>Tetris</title>
+        <style>
+        #arena{width: 300px; height: 720px;}
+        </style>
+    </head>
+    <body>
+        <canvas id="arena">
+            <script>
+            var arena = document.getElementById('arena');
+            arena.width = 100, arena.height = 240;
+            var ctx = arena.getContext('2d');
+            var MaxX = 10, MaxY = 24;
+            var last = 0;
+            var level = 5;
+            var score = 0;
+            var running = false;
+            var blocks = [
+                // l
+                [[[0,0],[1,0],[2,0],[3,0]],[[0,0],[0,1],[0,2],[0,3]],],
+                //T
+                [
+                    [[0,1],[1,1],[2,1],[1,0]],
+                    [[1,0],[1,1],[1,2],[2,1]],
+                    [[0,0],[1,0],[2,0],[1,1]],
+                    [[0,1],[1,0],[1,1],[1,2]],
+                ],
+                //L
+                [
+                    [[0,1],[0,0],[1,0],[2,0]],
+                    [[0,0],[1,0],[1,1],[1,2]],
+                    [[2,0],[0,1],[1,1],[2,1]],
+                    [[0,0],[0,1],[0,2],[1,2]],
+                ],
+                //lL
+                [
+                    [[2,1],[0,0],[1,0],[2,0]],
+                    [[0,2],[1,0],[1,1],[1,2]],
+                    [[0,0],[0,1],[1,1],[2,1]],
+                    [[0,0],[1,0],[0,1],[0,2]],
+                ],
+                //Z
+                [
+                    [[1,1],[2,1],[0,0],[1,0]],
+                    [[1,0],[0,1],[1,1],[0,2]],
+                ],
+                //S
+                [
+                    [[0,1],[1,1],[1,0],[2,0]],
+                    [[0,0],[0,1],[1,1],[1,2]],
+                ],
+                [
+                    [[0,1],[1,1],[0,0],[1,0]],
+                ]
+            ];
+            
+            var buffer = [];
+            for (var i = 0; i < MaxY; i++ ) {
+                buffer.push((new Array(MaxX)).fill(0))
+            }
+            var fall = [];
+            var center = {x:0, y:0};
+            var type = 0;
+            var mode = 0;
+
+            function move(step) {
+                var arrival = fall.reduce(function(a, dot){
+                    var x = dot.x + step;
+                    var owner = fall.reduce(function(b, odot){
+                        return b || (x == odot.x && dot.y == odot.y);
+                    }, false);
+                    return a && x >= 0 && x < MaxX && (buffer[dot.y][x] == 0 || owner); 
+                }, true);
+                if (arrival) {
+                    fall.map(function(dot){
+                        buffer[dot.y][dot.x] -= 1;
+                        dot.x += step;
+                        buffer[dot.y][dot.x] += 1;
+                    })
+                    center.x += step;
+                }
+            }
+
+            function turn() {
+                var nmode = mode + 1 < blocks[type].length ? mode + 1 : 0;
+                var arrival = blocks[type][nmode].reduce(function(a, dot){
+                    var x = dot[0] + center.x;
+                    var y = dot[1] + center.y;
+                    var owner = fall.reduce(function(b, odot){
+                        return b || (x == odot.x && y == odot.y);
+                    }, false);
+                    return a && x >= 0 && x < MaxX && y < MaxY && (buffer[y][x] == 0 || owner);
+                }, true);
+                if (arrival) {
+                    mode = nmode;
+                    blocks[type][nmode].map(function(dot, i){
+                        buffer[fall[i].y][fall[i].x] -= 1;
+                        fall[i].x = dot[0] + center.x;
+                        fall[i].y = dot[1] + center.y;
+                        buffer[fall[i].y][fall[i].x] += 1;
+                    });
+                }
+            }
+
+            function next(t) {
+                var able = true;
+                center.x = 3; center.y = 0;
+                type = t;
+                mode = Math.floor(Math.random()*blocks[t].length);
+                blocks[t][mode].map(function(dot){
+                    var x = dot[0] + center.x;
+                    var y = dot[1] + center.y;
+                    if (buffer[y][x] > 0) {
+                        able = false;
+                    }
+                    buffer[y][x] += 1;
+                    fall.push({x:x, y:y});
+                });
+                return able;
+            }
+
+            function restart() {
+                while(fall.length > 0) {fall.pop();};
+                for (var i=0; i < MaxY; i++) {
+                    for (var j=0; j < MaxX; j++) {
+                        buffer[i][j] = 0;
+                    }
+                }
+                running = true;
+                score = 0;
+            }
+            
+            window.onkeydown = function(e) {
+                switch(e.keyCode) {
+                    case 37:
+                        move(-1); break;
+                    case 38:
+                        turn(); break;
+                    case 39:
+                        move(1); break;
+                    case 40:
+                        last=0;logic(1000); break;
+                    case 32:
+                        if (!running) restart(); break;
+                    default:
+                        console.log(e);
+                        break;
+                }
+            }
+
+            function logic(timestamp) {
+                if (!running || timestamp - last < 1000/level) {
+                    return;
+                }
+                last = timestamp;
+                var able = fall.reduce(function(a, dot){
+                    var owner = fall.reduce(function(b, odot){
+                        return b || (dot.x == odot.x && dot.y+1 == odot.y);
+                    }, false);
+                    return a && dot.y < 23 && (buffer[dot.y + 1][dot.x] == 0 || owner)
+                }, true);
+                if (able) {
+                    fall.map(function(dot){
+                        buffer[dot.y][dot.x] -= 1;
+                        dot.y += 1;
+                        buffer[dot.y][dot.x] += 1;
+                    })
+                    center.y += 1;
+                } else {
+                    while (fall.length > 0) {
+                        fall.pop();
+                    }
+                    var row = -1;
+                    for (var i=MaxY-1; i>=0; i--) {
+                        if (row < 0) {
+                            if (buffer[i].reduce(function(a, v){return a && v > 0;}, true)) {
+                                row = i;
+                                buffer[i].fill(0);
+                                score += 1;
+                            }
+                        } else {
+                            buffer[i].map(function(v, j){
+                                v > 0 && fall.push({x:j, y:i});
+                            });
+                        }
+                    }
+                }
+                if (fall.length == 0) {
+                    var r = Math.floor(Math.random()*blocks.length);
+                    if (!next(r)){
+                        running = false;
+                        console.log('failed score : ' + score);
+                    }
+                }
+            }
+            
+            function update(timestamp) {
+                ctx.fillStyle = '#ccc';
+                ctx.fillRect(0, 0, arena.width, arena.height);
+                logic(timestamp);
+                buffer.map(function(row, y) {
+                    row.map(function(t, x){
+                        ctx.fillStyle = t == 0 ? '#fff' : '#000';
+                        ctx.fillRect(x*10 + 0.5, y*10 + 0.5, 9, 9);
+                    });
+                });
+                requestAnimationFrame(update);
+            }
+
+            requestAnimationFrame(update);
+            </script>
+        </canvas>
+    </body>
+</html>

@@ -1,6 +1,8 @@
 ## Tccgi
 
-简单的玩具型http服务器，支持基础的cgi请求。通过[tcc](http://bellard.org/tcc/)编译。  
+简单的玩具型http服务器，支持基础的cgi请求。可以通过[tcc](http://bellard.org/tcc/)编译。  
+
+> 已知在选择64位tcc时会导致select的句柄异常，建议使用32位编译。
 
 ### 构建：
   
@@ -37,30 +39,16 @@ cgi支持`Content-Type`与`Status`头部，不支持`Location`头
   
 ### 执行：
 ```  
-server.exe [-d www_root | -p port | -t cgi_timeout | -e cgi_extname]
+server.exe [-d www_root | -p port | -t cgi_timeout | -e cgi_extname | -v]
 Usage:
 -d root directory
 -p port        default port is 9527
 -t cgi timeout default is 3 seconds
 -e extname     default is cgi
+-v verbose
+
+# 测试hello.bat作为cgi脚本 打开 http://127.0.0.1:9527/hello.bat
+server.exe -e bat 
 ```  
 
-### License : WTFPL 
-
-```
-            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-                   Version 2, December 2004
-
-Copyright (C) 2004 Sam Hocevar <sam@hocevar.net>
-
-Everyone is permitted to copy and distribute verbatim or modified
-copies of this license document, and changing it is allowed as long
-as the name is changed.
-
-           DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-  TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
-
- 0. You just DO WHAT THE FUCK YOU WANT TO.
-
-```
-
+### License : MIT 

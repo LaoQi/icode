@@ -1,9 +1,9 @@
 Debug/
 Release/
 build/linux/csocket
+extends
 .vs/
 *.sdf
 *.opensdf
-*.cproject
-*.project
-
+.cproject
+.project

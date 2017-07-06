@@ -106,10 +106,10 @@ if (__i == ((fd_set *)(set))->fd_count) {\
 #if !(defined (__INSIDE_CYGWIN__) || (__INSIDE_MSYS__))
 #ifndef _TIMEVAL_DEFINED /* also in sys/time.h */
 #define _TIMEVAL_DEFINED
-struct timeval {
+typedef struct timeval {
 	long    tv_sec;
 	long    tv_usec;
-};
+} timeval;
 #define timerisset(tvp)	 ((tvp)->tv_sec || (tvp)->tv_usec)
 #define timercmp(tvp, uvp, cmp) \
 	(((tvp)->tv_sec != (uvp)->tv_sec) ? \
